@@ -10,10 +10,9 @@ SECRET_KEY comes from the Secret {{ include "silo.secretKeySecretName" . }}, key
 
   kubectl --namespace {{ .Release.Namespace }} create secret generic {{ include "silo.secretKeySecretName" . }} \
     --from-literal {{ .Values.secretKey.secretKey }}="$(openssl rand -base64 48)"
-{{- if not .Values.postgresql.enabled }}
 
-DATABASE_URL comes from the Secret {{ include "silo.databaseSecretName" . }}, key {{ .Values.database.secretKey }}.
-{{- end }}
+DATABASE_URL comes from the Secret {{ include "silo.databaseSecretName" . }}, key {{ .Values.database.secretKey }}, and must name a PostgreSQL with pgvector.
+{{- if .Values.redis.existingSecret }} REDIS_URL comes from {{ .Values.redis.existingSecret }}, key {{ .Values.redis.secretKey }}.{{ else }} No Redis is configured, so Watch Party rooms are off.{{ end }}
 {{- if .Values.transcode.enabled }}
 
 The transcode nodes read their keys from the Secret {{ include "silo.transcodeKeysSecretName" . }}, one per pod under its ordinal. Generate them with the same image, choosing ids no node has used:

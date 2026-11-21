@@ -1,7 +1,7 @@
 {{- if .Values.proxy.enabled }}
 {{- $component := "proxy" }}
 {{- if not (include "silo.hasRedis" .) }}
-{{- fail "proxy.enabled needs Redis (redis.enabled or redis.existingSecret): a proxy refuses to start without REDIS_URL" }}
+{{- fail "proxy.enabled needs Redis (redis.existingSecret): a proxy refuses to start without REDIS_URL" }}
 {{- end }}
 {{- $name := printf "%s-proxy" (include "silo.fullname" .) }}
 {{- $base := mergeOverwrite (include "silo.spread" (dict "root" $ "component" $component) | fromYaml) (dict "terminationGracePeriodSeconds" 60) }}

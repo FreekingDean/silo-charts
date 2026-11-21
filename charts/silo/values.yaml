@@ -51,12 +51,30 @@ secretKey:
   existingSecret: ""
   secretKey: SECRET_KEY
 
-# DATABASE_URL for a PostgreSQL of your own, used when postgresql.enabled is
-# false. It needs pgvector, and a role that may create the vector, pg_trgm and
-# citext extensions. Empty names a Secret with the release's own fullname.
+# The chart deploys only Silo. PostgreSQL, Redis and Meilisearch are yours to
+# run, with an operator, a managed service or another chart, and are named
+# here by Secrets you create.
+
+# DATABASE_URL, required. PostgreSQL with pgvector, no newer than 18: the
+# image's pg_dump, which backups and pre-migration dumps use, is 18. A role that
+# may create the vector, pg_trgm and citext extensions; preload
+# pg_stat_statements if you want query statistics. Empty names a Secret with
+# the release's own fullname, so one Secret can hold SECRET_KEY and
+# DATABASE_URL.
 database:
   existingSecret: ""
   secretKey: DATABASE_URL
+
+# REDIS_URL, out of a Secret you create. Optional for one API pod, though Watch
+# Party rooms need it; required for proxies and for more than one API pod.
+# Empty runs without Redis.
+redis:
+  existingSecret: ""
+  secretKey: REDIS_URL
+
+# Meilisearch is optional; without it Silo searches PostgreSQL. To use one,
+# set SILO_SEARCH_PROVIDER: meilisearch and SILO_MEILISEARCH_URL in settings
+# and SILO_MEILISEARCH_API_KEY in secretSettings.
 
 # TZ. Empty is Etc/UTC.
 timeZone: ""
@@ -202,9 +220,14 @@ persistence:
     accessModes: [ReadWriteOnce]
     size: 50Gi
 
-# MODE=proxy: stream egress nodes. Each pod registers itself on the main
-# server (SILO_NODE_REGISTER) by its own address behind a headless Service,
-# and clients are sent to it for playback. Proxies need the database and Redis.
+# MODE=proxy: stream egress nodes. Players are sent to a proxy for the stream
+# itself, so playback bandwidth, remuxing and direct play leave the API pods.
+# Off by default: one API pod serves streams itself.
+# A StatefulSet because a proxy's identity is its own URL (SILO_NODE_URL): the
+# main server keys its node row and session bookkeeping by it. A stable pod
+# name behind a headless Service keeps that URL across restarts; a Deployment
+# pod would register a new node on every restart. Proxies need the database
+# and Redis.
 proxy:
   enabled: false
   # Ignored while autoscaling is enabled.
@@ -242,7 +265,8 @@ proxy:
     maxUnavailable: 1
   pod: {}
 
-# MODE=transcode: encode nodes. A node opens no database or Redis; it reads its
+# MODE=transcode: encode nodes, a StatefulSet because each pod's key names
+# its node id and is picked by pod ordinal. A node opens no database or Redis; it reads its
 # configuration from the API with a node key. The API declares every node
 # (SILO_TRANSCODE_NODES_FILE) by its pod's own address, so nothing has to be
 # added in the admin UI.
@@ -286,105 +310,6 @@ transcode:
     enabled: false
     maxUnavailable: 1
   pod: {}
-
-# A PostgreSQL of the chart's own, as docker-compose.advanced.yml runs it:
-# pgvector with pg_stat_statements preloaded. The password is generated once
-# into <fullname>-postgresql and kept. Off, set database.existingSecret.
-postgresql:
-  enabled: true
-  image:
-    repository: pgvector/pgvector
-    # PostgreSQL refuses a data directory written by another major version.
-    tag: pg18
-    pullPolicy: ""
-  # A Secret you create with the key POSTGRES_PASSWORD, instead of the
-  # generated one. Letters and digits only: it goes into DATABASE_URL as is.
-  existingSecret: ""
-  # /dev/shm, which Compose sizes with shm_size.
-  shmSize: 1Gi
-  persistence:
-    existingClaim: ""
-    storageClass: ""
-    accessModes: [ReadWriteOnce]
-    size: 20Gi
-  resources:
-    requests:
-      cpu: 250m
-      memory: 512Mi
-    limits:
-      memory: 4Gi
-  pod:
-    securityContext:
-      runAsNonRoot: true
-      runAsUser: 999
-      runAsGroup: 999
-      fsGroup: 999
-      fsGroupChangePolicy: OnRootMismatch
-
-# A Redis of the chart's own, with an append-only file. Watch Party rooms need
-# Redis, proxies need it, and Meilisearch uses it for paging sessions. The
-# password is generated once into <fullname>-redis and kept.
-# Off, existingSecret names a Secret holding REDIS_URL for a Redis of your own,
-# and with neither the API runs without Redis.
-redis:
-  enabled: true
-  existingSecret: ""
-  secretKey: REDIS_URL
-  image:
-    repository: redis
-    tag: 8.2-alpine
-    pullPolicy: ""
-  persistence:
-    existingClaim: ""
-    storageClass: ""
-    accessModes: [ReadWriteOnce]
-    size: 2Gi
-  resources:
-    requests:
-      cpu: 50m
-      memory: 128Mi
-    limits:
-      memory: 1Gi
-  pod:
-    securityContext:
-      runAsNonRoot: true
-      runAsUser: 999
-      runAsGroup: 1000
-      fsGroup: 1000
-      fsGroupChangePolicy: OnRootMismatch
-
-# A Meilisearch of the chart's own for search. Off, Silo searches PostgreSQL.
-# The master key is generated once into <fullname>-meilisearch and kept.
-meilisearch:
-  enabled: false
-  image:
-    repository: getmeili/meilisearch
-    # Pinned: Meilisearch will not open data written by another version. After
-    # a bump set upgradeDb for one start.
-    tag: v1.54.0
-    pullPolicy: ""
-  upgradeDb: false
-  # A Secret you create with the key MEILI_MASTER_KEY, instead of the
-  # generated one.
-  existingSecret: ""
-  persistence:
-    existingClaim: ""
-    storageClass: ""
-    accessModes: [ReadWriteOnce]
-    size: 10Gi
-  resources:
-    requests:
-      cpu: 100m
-      memory: 512Mi
-    limits:
-      memory: 2Gi
-  pod:
-    securityContext:
-      runAsNonRoot: true
-      runAsUser: 1000
-      runAsGroup: 1000
-      fsGroup: 1000
-      fsGroupChangePolicy: OnRootMismatch
 
 # Gateway API. Off by default: a parentRef names a Gateway this chart cannot
 # guess. One route sends hostname to the API; jellyfin.hostname and

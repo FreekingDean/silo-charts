@@ -66,12 +66,6 @@ IfNotPresent
 {{- include "silo.pullPolicy" (dict "policy" .Values.image.pullPolicy "tag" (include "silo.tag" .)) }}
 {{- end }}
 
-{{- /* An image block of a bundled service: repository, tag, pullPolicy. */}}
-{{- define "silo.serviceImage" -}}
-image: {{ printf "%s:%s" .repository (toString .tag) }}
-imagePullPolicy: {{ include "silo.pullPolicy" (dict "policy" .pullPolicy "tag" .tag) }}
-{{- end }}
-
 {{- /*
 Everything in a merged `pod:` block that is not one of the chart's own keys
 goes into the pod spec as written.
@@ -116,37 +110,12 @@ topologySpreadConstraints:
 {{- default (include "silo.fullname" .) .Values.database.existingSecret }}
 {{- end }}
 
-{{- define "silo.postgresqlSecretName" -}}
-{{- default (printf "%s-postgresql" (include "silo.fullname" .)) .Values.postgresql.existingSecret }}
-{{- end }}
-
-{{- define "silo.redisSecretName" -}}
-{{- printf "%s-redis" (include "silo.fullname" .) }}
-{{- end }}
-
-{{- define "silo.meilisearchSecretName" -}}
-{{- default (printf "%s-meilisearch" (include "silo.fullname" .)) .Values.meilisearch.existingSecret }}
-{{- end }}
-
 {{- define "silo.transcodeKeysSecretName" -}}
 {{- default (printf "%s-transcode-keys" (include "silo.fullname" .)) .Values.transcode.keys.existingSecret }}
 {{- end }}
 
 {{- define "silo.hasRedis" -}}
-{{- if or .Values.redis.enabled .Values.redis.existingSecret }}true{{ end }}
-{{- end }}
-
-{{- /*
-A random value that survives upgrades: the one already in the Secret when
-there is one. `helm template` has no cluster to look in and renders a new one.
-*/}}
-{{- define "silo.generated" -}}
-{{- $secret := lookup "v1" "Secret" .root.Release.Namespace .name }}
-{{- if and $secret $secret.data (hasKey $secret.data .key) }}
-{{- index $secret.data .key }}
-{{- else }}
-{{- randAlphaNum (int .length) | b64enc }}
-{{- end }}
+{{- if .Values.redis.existingSecret }}true{{ end }}
 {{- end }}
 
 {{- define "silo.coreUrl" -}}
@@ -186,38 +155,20 @@ there is one. `helm template` has no cluster to look in and renders a new one.
 {{- end }}
 
 {{- define "silo.databaseEnv" -}}
-{{- if .Values.postgresql.enabled }}
-- name: POSTGRES_PASSWORD
-  valueFrom:
-    secretKeyRef:
-      name: {{ include "silo.postgresqlSecretName" . }}
-      key: POSTGRES_PASSWORD
-- name: DATABASE_URL
-  value: {{ printf "postgres://silo:$(POSTGRES_PASSWORD)@%s:5432/silo?sslmode=disable" (include "silo.svcHost" (dict "root" . "name" (printf "%s-postgresql" (include "silo.fullname" .)))) | quote }}
-{{- else }}
 - name: DATABASE_URL
   valueFrom:
     secretKeyRef:
       name: {{ include "silo.databaseSecretName" . }}
       key: {{ .Values.database.secretKey }}
 {{- end }}
-{{- end }}
 
 {{- define "silo.redisEnv" -}}
-{{- if .Values.redis.enabled }}
-- name: REDIS_PASSWORD
-  valueFrom:
-    secretKeyRef:
-      name: {{ include "silo.redisSecretName" . }}
-      key: REDIS_PASSWORD
-- name: REDIS_URL
-  value: {{ printf "redis://:$(REDIS_PASSWORD)@%s:6379" (include "silo.svcHost" (dict "root" . "name" (printf "%s-redis" (include "silo.fullname" .)))) | quote }}
-{{- else if .Values.redis.existingSecret }}
+{{- with .Values.redis.existingSecret }}
 - name: REDIS_URL
   valueFrom:
     secretKeyRef:
-      name: {{ .Values.redis.existingSecret }}
-      key: {{ .Values.redis.secretKey }}
+      name: {{ . }}
+      key: {{ $.Values.redis.secretKey }}
 {{- end }}
 {{- end }}
 
@@ -264,21 +215,6 @@ emptyDir: {}
 
 {{- define "silo.dataShared" -}}
 {{- if has "ReadWriteMany" .Values.persistence.data.accessModes }}true{{ end }}
-{{- end }}
-
-{{- /* A StatefulSet volumeClaimTemplate, or nothing when existingClaim is set. */}}
-{{- define "silo.claimTemplate" -}}
-- metadata:
-    name: data
-  spec:
-    accessModes:
-      {{- toYaml .accessModes | nindent 6 }}
-    {{- with .storageClass }}
-    storageClassName: {{ if eq . "-" }}""{{ else }}{{ . | quote }}{{ end }}
-    {{- end }}
-    resources:
-      requests:
-        storage: {{ .size }}
 {{- end }}
 
 {{- define "silo.transcodeNodesDocument" -}}

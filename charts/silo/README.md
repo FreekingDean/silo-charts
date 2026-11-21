@@ -1,28 +1,36 @@
 # Deploy Silo as components
 
-This chart runs [Silo](https://github.com/Silo-Server/silo-server) split into the parts it already knows how to be: API servers, proxy nodes and transcode nodes, each its own workload, beside a PostgreSQL, Redis and Meilisearch of their own, or yours. It is upstream's `docker-compose.advanced.yml` plus its node modes, laid out for Kubernetes. Its values and structure follow the [gojellyfin chart](https://github.com/FreekingDean/gojellyfin/tree/main/charts/gojellyfin).
+This chart runs [Silo](https://github.com/Silo-Server/silo-server) split into the parts it already knows how to be: API servers, proxy nodes and transcode nodes, each its own workload. It deploys only Silo. PostgreSQL, Redis and Meilisearch are yours to run (an operator such as CloudNativePG, a managed service, another chart) and are wired in through Secrets you create. Its values and structure follow the [gojellyfin chart](https://github.com/FreekingDean/gojellyfin/tree/main/charts/gojellyfin).
 
 For one pod with everything bundled, use [`silo-omnibus`](../silo-omnibus).
 
 ## Install
 
-`SECRET_KEY` is Silo's master key for at-rest credential encryption. The API and proxies refuse to start without it, and every one needs the same key. The chart never generates it. Create it and back it up apart from the database:
+You need a PostgreSQL with pgvector (no newer than 18, the image's `pg_dump` version) and, for Watch Party, proxies or more than one API pod, a Redis.
+
+`SECRET_KEY` is Silo's master key for at-rest credential encryption. The API and proxies refuse to start without it, and every one needs the same key. The chart never generates it. Put it and `DATABASE_URL` in one Secret, and back the key up apart from the database:
 
 ```sh
 kubectl create secret generic silo \
-  --from-literal SECRET_KEY="$(openssl rand -base64 48)"
+  --from-literal SECRET_KEY="$(openssl rand -base64 48)" \
+  --from-literal DATABASE_URL='postgres://silo:password@postgres:5432/silo?sslmode=require'
+kubectl create secret generic silo-redis \
+  --from-literal REDIS_URL='redis://:password@redis:6379'
 
 helm install silo charts/silo \
   --set hostname=silo.example.com \
+  --set redis.existingSecret=silo-redis \
   --set-json 'media.volume={"persistentVolumeClaim":{"claimName":"media"}}'
 ```
 
-With the release named `silo` the chart reads the Secret `silo`; set `secretKey.existingSecret` otherwise. The bundled PostgreSQL and Redis passwords are generated into `silo-postgresql` and `silo-redis` on first install and kept across upgrades and uninstalls. Open the web app to finish first-run setup.
+With the release named `silo` the chart reads the Secret `silo`; set `secretKey.existingSecret` and `database.existingSecret` otherwise. Open the web app to finish first-run setup.
 
 ### The smallest install
 
 ```yaml
 hostname: silo.example.com
+redis:
+  existingSecret: silo-redis
 media:
   volume:
     persistentVolumeClaim:
@@ -43,9 +51,8 @@ One image, `ghcr.io/silo-server/silo-server`, started as `silo` (not the image's
 | `api` | Deployment | `api` | yes | The web app, native, Jellyfin and Audiobookshelf APIs, scanner, background work. Runs migrations before it listens |
 | `proxy` | StatefulSet | `proxy` | no | Stream egress nodes. Each registers itself on the main server by its own address |
 | `transcode` | StatefulSet | `transcode` | no | Encode nodes. No database or Redis; configured by the API with a node key |
-| `postgresql` | StatefulSet | | yes | `pgvector/pgvector:pg18` with `pg_stat_statements`, as the advanced compose file runs it |
-| `redis` | StatefulSet | | yes | Append-only Redis with a password. Watch Party, proxies and multi-API need it |
-| `meilisearch` | StatefulSet | | no | Pinned Meilisearch for search |
+
+Proxies and transcode nodes are StatefulSets because each pod needs a stable identity: a proxy is keyed on the main server by its own URL, and a transcode node by the key its ordinal selects. They hold no volumes of their own.
 
 There is no migration Job: Silo migrates at API startup, under a lock, and backs the database up first. The API's startup probe allows 22.5 minutes for that.
 
@@ -56,6 +63,8 @@ One replica by default. More need `persistence.data` to be `ReadWriteMany` (artw
 On SIGTERM the API fails `/api/v1/ready` at once and keeps serving for `drainSeconds` (`SILO_SHUTDOWN_DELAY`), so gateways move on before it closes. The grace period is `drainSeconds` plus 90 seconds, as upstream asks.
 
 ### Proxy nodes
+
+A proxy is a playback-only Silo. The API decides what a player gets and then hands it a stream URL on a proxy, so the bytes (direct play, remux, downloads) flow from proxy pods instead of the API pods. They let streaming bandwidth scale, or sit closer to the players, without adding API replicas. They are off by default: a single API pod streams itself, as the omnibus image does.
 
 Proxies stream to players directly. Each pod's identity is its own address, `http://<pod>.<fullname>-proxy.<namespace>.svc.<clusterDomain>:8080`, behind a headless Service, and it registers itself (`SILO_NODE_REGISTER=true`) with its pod name as its node name. Players are handed `SILO_NODE_PUBLIC_URL`, which has to reach that one pod. Set `proxy.publicUrl` with `$(POD_NAME)` in it, which Kubernetes expands per pod, and give each pod a route of its own:
 
@@ -118,7 +127,8 @@ Turning `transcode.enabled` off stops declaring nodes but leaves the ones alread
 | `jellyfin.hostname` | `SILO_JELLYFIN_PUBLIC_URL` | `""` | Route and public URL for the Jellyfin/Emby listener |
 | `audiobookshelf.hostname` | | `""` | Route for the Audiobookshelf listener |
 | `secretKey.existingSecret`, `.secretKey` | `SECRET_KEY` | `""`, `SECRET_KEY` | Empty means the release's fullname |
-| `database.existingSecret`, `.secretKey` | `DATABASE_URL` | `""`, `DATABASE_URL` | Used when `postgresql.enabled` is false. It needs pgvector and a role that may create `vector`, `pg_trgm` and `citext` |
+| `database.existingSecret`, `.secretKey` | `DATABASE_URL` | `""`, `DATABASE_URL` | Required. Empty means the release's fullname. pgvector, PostgreSQL 18 at most, and a role that may create `vector`, `pg_trgm` and `citext` |
+| `redis.existingSecret`, `.secretKey` | `REDIS_URL` | `""`, `REDIS_URL` | Optional for one API pod; required for proxies and several API pods |
 | `timeZone` | `TZ` | `""` | Empty is `Etc/UTC` |
 | `trustedProxies` | `SILO_TRUSTED_PROXIES` | `[]` | The gateway's networks |
 | `settings` | anything | `{}` | API server settings as `NAME: value`, the variables `.env.example` lists. `POSTGRES_TUNE` is off unless you set it here |
@@ -154,19 +164,9 @@ Turning `transcode.enabled` off stops declaring nodes but leaves the ones alread
 | `transcode.drainTimeoutSeconds` | `600` | `SILO_NODE_DRAIN_TIMEOUT` |
 | `transcode.scratch.sizeLimit`, `.resources`, `.podDisruptionBudget.*`, `.pod` | | |
 
-### Bundled services
+### Search
 
-| Value | Default | Description |
-|---|---|---|
-| `postgresql.enabled` | `true` | Off, set `database.existingSecret` |
-| `postgresql.image.*` | `pgvector/pgvector:pg18` | PostgreSQL refuses a data directory from another major version |
-| `postgresql.existingSecret` | `""` | A Secret with `POSTGRES_PASSWORD` instead of the generated one; letters and digits only |
-| `postgresql.shmSize`, `.persistence.*`, `.resources`, `.pod` | `1Gi`, 20Gi | |
-| `redis.enabled` | `true` | Off, `redis.existingSecret` names a Secret holding `REDIS_URL` (key `redis.secretKey`); with neither the API runs without Redis |
-| `redis.image.*`, `.persistence.*`, `.resources`, `.pod` | `redis:8.2-alpine`, 2Gi | |
-| `meilisearch.enabled` | `false` | On, the API gets `SILO_SEARCH_PROVIDER=meilisearch` and its URL and key |
-| `meilisearch.image.*` | `getmeili/meilisearch:v1.54.0` | Pinned: Meilisearch will not open data from another version. Set `upgradeDb` for one start after a bump |
-| `meilisearch.existingSecret`, `.persistence.*`, `.resources`, `.pod` | `""`, 10Gi | |
+Without Meilisearch, Silo searches PostgreSQL. To use one you run, set `SILO_SEARCH_PROVIDER: meilisearch` and `SILO_MEILISEARCH_URL` in `settings` and `SILO_MEILISEARCH_API_KEY` in the `secretSettings` Secret.
 
 ### Pods, Services, routes
 

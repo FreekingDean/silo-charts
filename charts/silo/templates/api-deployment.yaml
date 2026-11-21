@@ -4,7 +4,7 @@
 {{- fail "more than one API pod needs persistence.data.accessModes to include ReadWriteMany: artwork, plugins and the Jellyfin web client live on that volume, and every API pod writes them" }}
 {{- end }}
 {{- if and $multi (not (include "silo.hasRedis" .)) }}
-{{- fail "more than one API pod needs Redis (redis.enabled or redis.existingSecret): sessions and events are shared through it" }}
+{{- fail "more than one API pod needs Redis (redis.existingSecret): sessions and events are shared through it" }}
 {{- end }}
 {{- $base := mergeOverwrite (include "silo.spread" (dict "root" $ "component" $component) | fromYaml) (dict "terminationGracePeriodSeconds" (add (int .Values.drainSeconds) 90)) }}
 {{- $pod := include "silo.mergePod" (dict "root" $ "base" $base "pod" .Values.api.pod) | fromYaml }}
@@ -87,17 +87,6 @@ spec:
             {{- with .Values.trustedProxies }}
             - name: SILO_TRUSTED_PROXIES
               value: {{ join "," . | quote }}
-            {{- end }}
-            {{- if .Values.meilisearch.enabled }}
-            - name: SILO_SEARCH_PROVIDER
-              value: meilisearch
-            - name: SILO_MEILISEARCH_URL
-              value: {{ printf "http://%s:7700" (include "silo.svcHost" (dict "root" . "name" (printf "%s-meilisearch" (include "silo.fullname" .)))) | quote }}
-            - name: SILO_MEILISEARCH_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "silo.meilisearchSecretName" . }}
-                  key: MEILI_MASTER_KEY
             {{- end }}
             {{- if .Values.transcode.enabled }}
             - name: SILO_TRANSCODE_NODES_FILE

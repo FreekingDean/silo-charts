@@ -53,36 +53,36 @@ refuses silo-omnibus --set httpRoute.enabled=true
 
 # silo
 render silo
-render silo --set postgresql.enabled=false --set redis.enabled=false
-render silo --set postgresql.enabled=false --set database.existingSecret=silo-db \
-  --set redis.enabled=false --set redis.existingSecret=silo-redis --set proxy.enabled=true
-render silo --set meilisearch.enabled=true --set metrics.enabled=true --set persistence.downloadArtifacts.enabled=true
+render silo --set redis.existingSecret=silo-redis --set database.existingSecret=silo-db --set proxy.enabled=true
+render silo --set metrics.enabled=true --set persistence.downloadArtifacts.enabled=true \
+  --set settings.SILO_SEARCH_PROVIDER=meilisearch --set settings.SILO_MEILISEARCH_URL=http://meili:7700
 render silo --set transcode.enabled=true --set transcode.replicas=3 --set transcode.hwAccel=vaapi \
   --set transcode.hwDevice=/dev/dri/renderD128 --set transcode.podDisruptionBudget.enabled=true
 render silo --set transcode.enabled=true --set transcode.sourceAccess=core
-render silo --set proxy.enabled=true --set 'proxy.publicUrl=https://$(POD_NAME).stream.example.test' \
+render silo --set redis.existingSecret=silo-redis --set proxy.enabled=true \
+  --set 'proxy.publicUrl=https://$(POD_NAME).stream.example.test' \
   --set proxy.autoscaling.enabled=true --set proxy.podDisruptionBudget.enabled=true
 render silo --set api.replicas=2 --set 'persistence.data.accessModes={ReadWriteMany}' \
-  --set api.podDisruptionBudget.enabled=true
-render silo --set api.autoscaling.enabled=true --set 'persistence.data.accessModes={ReadWriteMany}'
+  --set redis.existingSecret=silo-redis --set api.podDisruptionBudget.enabled=true
+render silo --set api.autoscaling.enabled=true --set 'persistence.data.accessModes={ReadWriteMany}' \
+  --set redis.existingSecret=silo-redis
 render silo --set hostname=silo.example.test --set jellyfin.hostname=jf.example.test \
   --set httpRoute.enabled=true --set 'httpRoute.parentRefs[0].name=gateway'
-render silo --set pod=null --set api.resources=null --set postgresql.pod=null --set redis.pod=null
-render silo --set postgresql.persistence.existingClaim=pg --set redis.persistence.existingClaim=redis \
-  --set meilisearch.enabled=true --set meilisearch.persistence.existingClaim=meili \
-  --set postgresql.existingSecret=pg-pass --set meilisearch.existingSecret=meili-key
+render silo --set pod=null --set api.resources=null
 render silo --set settings.SILO_SIGNUP_ENABLED=false --set secretSettings.existingSecret=silo-settings \
   --set-json 'env=[{"name":"HOST_IP","valueFrom":{"fieldRef":{"fieldPath":"status.hostIP"}}}]' \
   --set-json 'media.extraVolumes=[{"name":"books","mountPath":"/mnt/books","volume":{"emptyDir":{}}}]'
 
 refuses silo --set httpRoute.enabled=true
-refuses silo --set api.replicas=2
-refuses silo --set api.replicas=2 --set 'persistence.data.accessModes={ReadWriteMany}' --set redis.enabled=false
-refuses silo --set proxy.enabled=true --set redis.enabled=false
+refuses silo --set api.replicas=2 --set redis.existingSecret=silo-redis
+refuses silo --set api.replicas=2 --set 'persistence.data.accessModes={ReadWriteMany}'
+refuses silo --set proxy.enabled=true
 refuses silo --set transcode.enabled=true --set transcode.replicas=0
 refuses silo --set transcode.enabled=true --set transcode.sourceAccess=nfs
-refuses silo --set api.autoscaling.enabled=true --set 'persistence.data.accessModes={ReadWriteMany}' --set api.resources=null
-refuses silo --set proxy.enabled=true --set proxy.autoscaling.enabled=true --set proxy.autoscaling.minReplicas=9
+refuses silo --set api.autoscaling.enabled=true --set 'persistence.data.accessModes={ReadWriteMany}' \
+  --set redis.existingSecret=silo-redis --set api.resources=null
+refuses silo --set redis.existingSecret=silo-redis --set proxy.enabled=true \
+  --set proxy.autoscaling.enabled=true --set proxy.autoscaling.minReplicas=9
 
 if command -v kubeconform > /dev/null; then
   kubeconform -strict -summary -kubernetes-version "$KUBE_VERSION" -ignore-missing-schemas "$out"/*.yaml
