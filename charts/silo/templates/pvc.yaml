@@ -1,0 +1,30 @@
+{{- $claims := list }}
+{{- if not .Values.persistence.data.existingClaim }}
+{{- $claims = append $claims (dict "name" (include "silo.dataClaimName" .) "values" .Values.persistence.data) }}
+{{- end }}
+{{- if and .Values.persistence.downloadArtifacts.enabled (not .Values.persistence.downloadArtifacts.existingClaim) }}
+{{- $claims = append $claims (dict "name" (include "silo.downloadsClaimName" .) "values" .Values.persistence.downloadArtifacts) }}
+{{- end }}
+{{- range $claims }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "silo.labels" (dict "root" $ "component" "api") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+    {{- with .values.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .values.accessModes | nindent 4 }}
+  {{- with .values.storageClass }}
+  storageClassName: {{ if eq . "-" }}""{{ else }}{{ . | quote }}{{ end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .values.size }}
+{{- end }}

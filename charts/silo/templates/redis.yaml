@@ -1,0 +1,106 @@
+{{- if .Values.redis.enabled }}
+{{- $component := "redis" }}
+{{- $name := printf "%s-redis" (include "silo.fullname" .) }}
+{{- $values := .Values.redis }}
+{{- $pod := include "silo.mergePod" (dict "root" $ "base" (dict "terminationGracePeriodSeconds" 30) "pod" $values.pod) | fromYaml }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "silo.labels" (dict "root" $ "component" $component) | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  REDIS_PASSWORD: {{ include "silo.generated" (dict "root" $ "name" $name "key" "REDIS_PASSWORD" "length" 32) }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "silo.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $name }}
+  selector:
+    matchLabels:
+      {{- include "silo.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      {{- with $pod.annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "silo.podLabels" (dict "root" $ "component" $component "pod" $pod) | nindent 8 }}
+    spec:
+      {{- with (include "silo.podSpec" $pod | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: redis
+          {{- include "silo.serviceImage" $values.image | nindent 10 }}
+          # An append-only file, synced every second, as the omnibus image
+          # forces: a snapshot alone can bring back a playback session older
+          # than its revocation.
+          command: ["sh", "-c"]
+          args:
+            - exec redis-server --dir /data --appendonly yes --appendfsync everysec --requirepass "$REDIS_PASSWORD"
+          ports:
+            - name: redis
+              containerPort: 6379
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}
+                  key: REDIS_PASSWORD
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+          {{- with $values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $pod.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- with $values.persistence.existingClaim }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ . }}
+      {{- end }}
+  {{- if not $values.persistence.existingClaim }}
+  volumeClaimTemplates:
+    {{- include "silo.claimTemplate" $values.persistence | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "silo.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  selector:
+    {{- include "silo.selectorLabels" (dict "root" $ "component" $component) | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+{{- end }}

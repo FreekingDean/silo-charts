@@ -1,0 +1,32 @@
+{{- $claims := list }}
+{{- if not .Values.persistence.config.existingClaim }}
+{{- $claims = append $claims (dict "name" (include "silo-omnibus.configClaimName" .) "values" .Values.persistence.config) }}
+{{- end }}
+{{- if and .Values.persistence.downloadArtifacts.enabled (not .Values.persistence.downloadArtifacts.existingClaim) }}
+{{- $claims = append $claims (dict "name" (include "silo-omnibus.downloadsClaimName" .) "values" .Values.persistence.downloadArtifacts) }}
+{{- end }}
+{{- range $claims }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "silo-omnibus.labels" $ | nindent 4 }}
+  annotations:
+    # The database lives on this volume. An uninstall leaves it behind; delete
+    # it yourself once you are sure.
+    helm.sh/resource-policy: keep
+    {{- with .values.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .values.accessModes | nindent 4 }}
+  {{- with .values.storageClass }}
+  storageClassName: {{ if eq . "-" }}""{{ else }}{{ . | quote }}{{ end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .values.size }}
+{{- end }}

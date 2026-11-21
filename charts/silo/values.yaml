@@ -1,0 +1,397 @@
+nameOverride: ""
+fullnameOverride: ""
+
+# The name clients reach the server by. The routes match it and
+# SILO_PUBLIC_URL advertises <scheme>://<hostname>. Empty sets no public URL.
+hostname: ""
+# What the gateway in front of this listens on, and the only thing it is used
+# for: advertising https over a plain listener loses a client as surely as
+# advertising the wrong hostname.
+scheme: https
+
+# The Jellyfin/Emby-compatible listener (8096) and the Audiobookshelf one
+# (13378) are separate ports on every API pod. Each gets its own route when a
+# hostname is set here. jellyfin.hostname is also SILO_JELLYFIN_PUBLIC_URL.
+jellyfin:
+  hostname: ""
+audiobookshelf:
+  hostname: ""
+
+# The cluster's DNS suffix, used to build each node's own address.
+clusterDomain: cluster.local
+
+image:
+  # One image for the API, proxy and transcode workloads. It is the omnibus
+  # image, started with `silo` as its entrypoint and a non-root uid, which runs
+  # none of its init: no bundled services, no PUID mapping, no FILE__ loading.
+  # That is the upstream "run Silo without root" layout.
+  repository: ghcr.io/silo-server/silo-server
+  # Empty takes the chart's appVersion. Every workload shares it: migrations
+  # run from the API, and a proxy or node on another build can disagree with
+  # the schema it finds.
+  tag: ""
+  # Empty is Always for a tag that moves and IfNotPresent for one that does not.
+  pullPolicy: ""
+
+# The container port every Silo workload listens on (PORT), plus the API's two
+# compatibility listeners (JF_PORT, ABS_PORT).
+ports:
+  http: 8080
+  jellyfin: 8096
+  audiobookshelf: 13378
+
+# SECRET_KEY, the master key Silo encrypts stored credentials under. The API
+# and proxies refuse to start without it and every one needs the same key.
+# Nothing recovers the secrets it protects once it is lost, so the chart never
+# generates one: create the Secret yourself and back the key up.
+#   kubectl create secret generic <release fullname> \
+#     --from-literal SECRET_KEY="$(openssl rand -base64 48)"
+# Empty names a Secret with the release's own fullname.
+secretKey:
+  existingSecret: ""
+  secretKey: SECRET_KEY
+
+# DATABASE_URL for a PostgreSQL of your own, used when postgresql.enabled is
+# false. It needs pgvector, and a role that may create the vector, pg_trgm and
+# citext extensions. Empty names a Secret with the release's own fullname.
+database:
+  existingSecret: ""
+  secretKey: DATABASE_URL
+
+# TZ. Empty is Etc/UTC.
+timeZone: ""
+
+# SILO_TRUSTED_PROXIES: the networks the gateway's pods sit in, usually the pod
+# CIDR. Empty keeps Silo's default, RFC 1918 ranges and loopback.
+trustedProxies: []
+
+# Server settings from the environment for the API pods, as .env.example lists
+# them (SILO_SMTP_HOST, SILO_HW_ACCEL, POSTGRES_TUNE, ...). Most are stored for
+# the whole cluster; while one is set the admin UI shows it read-only.
+settings: {}
+  # SILO_SERVER_NAME: Silo
+  # SILO_SIGNUP_ENABLED: "false"
+
+# Settings that are secrets (SILO_SMTP_PASSWORD, SILO_TMDB_API_KEY, ...), out of
+# a Secret you create whose keys are the variable names. API pods only.
+secretSettings:
+  existingSecret: ""
+
+# Extra env for every Silo workload, in Kubernetes' own shape. It comes first,
+# so a later value can refer to one of these as $(NAME).
+env: []
+
+# The media, mounted from wherever it already lives. It has to be the same
+# media at the same path in every pod that reads it: the API scans it, and
+# proxies and transcode nodes open the paths the API hands them.
+media:
+  mountPath: /mnt/media
+  # Any volume source: persistentVolumeClaim, nfs, hostPath. Empty mounts an
+  # emptyDir, which is a library with nothing in it.
+  volume: {}
+  extraVolumes: []
+  # - name: books
+  #   mountPath: /mnt/books
+  #   volume:
+  #     nfs: {server: nas.lan, path: /books}
+
+# SILO_SHUTDOWN_DELAY, in seconds. On SIGTERM an API pod fails readiness and
+# keeps serving this long, so gateways stop routing to it before it closes.
+drainSeconds: 5
+
+# SILO_METRICS_LISTEN on every Silo workload. Off exposes no /metrics.
+metrics:
+  enabled: false
+  port: 9090
+
+# Every Service this chart creates for clients. ClusterIP addresses for the
+# routes below to name.
+service:
+  type: ClusterIP
+  # The port the API's Service answers http on. Jellyfin and Audiobookshelf
+  # keep their own numbers.
+  port: 80
+  annotations: {}
+  labels: {}
+
+# Merged into every pod the chart renders. A workload's own `pod:` overrides
+# this key by key. Anything that is not annotations, labels or
+# containerSecurityContext goes into the pod spec as written.
+pod:
+  annotations: {}
+  labels: {}
+  # Nothing here talks to the Kubernetes API.
+  automountServiceAccountToken: false
+  imagePullSecrets: []
+  # 911 is the image's silo account. It needs read access to the media; add
+  # the media's group to supplementalGroups if it is not world readable.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 911
+    runAsGroup: 911
+    fsGroup: 911
+    fsGroupChangePolicy: OnRootMismatch
+  # NET_ADMIN never reaches a non-root process, so there is nothing to keep.
+  # Silo logs the TCP limits it cannot change.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# MODE=api: the web app, the native, Jellyfin and Audiobookshelf APIs, the
+# scanner and background work, and database migrations, which run before it
+# listens.
+api:
+  # More than one needs persistence.data to be ReadWriteMany (artwork, plugins
+  # and the Jellyfin web client live there) and Redis. With network access
+  # provider plugins installed, Silo supports only one.
+  # Ignored while autoscaling is enabled.
+  replicas: 1
+  # Migrations run before the listener opens, for up to SILO_MIGRATE_TIMEOUT
+  # (20m by default). The startup probe covers that so a migrating pod is not
+  # restarted mid-migration.
+  startupProbe:
+    periodSeconds: 15
+    failureThreshold: 90
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 4Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 80
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+          - type: Pods
+            value: 1
+            periodSeconds: 120
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+  pod: {}
+
+persistence:
+  # /config/silo (= /var/lib/silo): artwork, plugins, the Jellyfin web client.
+  # The API's state outside the database.
+  data:
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 20Gi
+    annotations: {}
+  # /tmp/silo-transcode on the API, a scratch emptyDir. sizeLimit bounds it.
+  transcode:
+    sizeLimit: ""
+  # /tmp/silo-download-artifacts, prepared downloads. Off is an emptyDir.
+  downloadArtifacts:
+    enabled: false
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 50Gi
+
+# MODE=proxy: stream egress nodes. Each pod registers itself on the main
+# server (SILO_NODE_REGISTER) by its own address behind a headless Service,
+# and clients are sent to it for playback. Proxies need the database and Redis.
+proxy:
+  enabled: false
+  # Ignored while autoscaling is enabled.
+  replicas: 2
+  # SILO_NODE_PUBLIC_URL, the address players are handed. Each proxy needs its
+  # own, so $(POD_NAME) is expanded per pod:
+  #   https://$(POD_NAME).stream.example.com
+  # Empty hands players the in-cluster address, which only works for players
+  # inside the cluster network.
+  publicUrl: ""
+  # SILO_NODE_GROUP, SILO_NODE_MAX_STREAMS, SILO_NODE_MAX_BANDWIDTH_KBPS.
+  group: ""
+  maxStreams: 0
+  maxBandwidthKbps: 0
+  resources:
+    requests:
+      cpu: "1"
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 600
+        policies:
+          - type: Pods
+            value: 1
+            periodSeconds: 300
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+  pod: {}
+
+# MODE=transcode: encode nodes. A node opens no database or Redis; it reads its
+# configuration from the API with a node key. The API declares every node
+# (SILO_TRANSCODE_NODES_FILE) by its pod's own address, so nothing has to be
+# added in the admin UI.
+transcode:
+  enabled: false
+  # Fixed: each pod's key names its node id, so the count is the number of keys.
+  replicas: 1
+  # One key per pod, out of a Secret you create whose keys are the pod
+  # ordinals, "0", "1", ...:
+  #   kubectl create secret generic <fullname>-transcode-keys \
+  #     --from-literal 0="$(silo node-key generate --id 1001)" \
+  #     --from-literal 1="$(silo node-key generate --id 1002)"
+  # Pick ids no node has used. Empty names <fullname>-transcode-keys.
+  keys:
+    existingSecret: ""
+  # SILO_NODE_SOURCE_ACCESS: local opens media from the mount below; core
+  # streams it from the API instead, and the node needs no media mount.
+  sourceAccess: local
+  # SILO_NODE_HW_ACCEL and SILO_NODE_HW_DEVICE, such as vaapi and
+  # /dev/dri/renderD128. Give the pods the GPU through resources and pod.
+  hwAccel: ""
+  hwDevice: ""
+  # SILO_NODE_MAX_TRANSCODES, 0 is unlimited. SILO_NODE_GROUP.
+  maxTranscodes: 0
+  group: ""
+  # SILO_NODE_DRAIN_TIMEOUT. On SIGTERM a node stops taking work and finishes
+  # what it holds for up to this long. The pod gets a minute more.
+  drainTimeoutSeconds: 600
+  # /tmp/silo-transcode, a scratch emptyDir.
+  scratch:
+    sizeLimit: ""
+  resources:
+    requests:
+      cpu: "2"
+      memory: 1Gi
+    limits:
+      memory: 4Gi
+    # gpu.intel.com/i915: 1
+    # nvidia.com/gpu: 1
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+  pod: {}
+
+# A PostgreSQL of the chart's own, as docker-compose.advanced.yml runs it:
+# pgvector with pg_stat_statements preloaded. The password is generated once
+# into <fullname>-postgresql and kept. Off, set database.existingSecret.
+postgresql:
+  enabled: true
+  image:
+    repository: pgvector/pgvector
+    # PostgreSQL refuses a data directory written by another major version.
+    tag: pg18
+    pullPolicy: ""
+  # A Secret you create with the key POSTGRES_PASSWORD, instead of the
+  # generated one. Letters and digits only: it goes into DATABASE_URL as is.
+  existingSecret: ""
+  # /dev/shm, which Compose sizes with shm_size.
+  shmSize: 1Gi
+  persistence:
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 4Gi
+  pod:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 999
+      runAsGroup: 999
+      fsGroup: 999
+      fsGroupChangePolicy: OnRootMismatch
+
+# A Redis of the chart's own, with an append-only file. Watch Party rooms need
+# Redis, proxies need it, and Meilisearch uses it for paging sessions. The
+# password is generated once into <fullname>-redis and kept.
+# Off, existingSecret names a Secret holding REDIS_URL for a Redis of your own,
+# and with neither the API runs without Redis.
+redis:
+  enabled: true
+  existingSecret: ""
+  secretKey: REDIS_URL
+  image:
+    repository: redis
+    tag: 8.2-alpine
+    pullPolicy: ""
+  persistence:
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 1Gi
+  pod:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 999
+      runAsGroup: 1000
+      fsGroup: 1000
+      fsGroupChangePolicy: OnRootMismatch
+
+# A Meilisearch of the chart's own for search. Off, Silo searches PostgreSQL.
+# The master key is generated once into <fullname>-meilisearch and kept.
+meilisearch:
+  enabled: false
+  image:
+    repository: getmeili/meilisearch
+    # Pinned: Meilisearch will not open data written by another version. After
+    # a bump set upgradeDb for one start.
+    tag: v1.54.0
+    pullPolicy: ""
+  upgradeDb: false
+  # A Secret you create with the key MEILI_MASTER_KEY, instead of the
+  # generated one.
+  existingSecret: ""
+  persistence:
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  pod:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      fsGroup: 1000
+      fsGroupChangePolicy: OnRootMismatch
+
+# Gateway API. Off by default: a parentRef names a Gateway this chart cannot
+# guess. One route sends hostname to the API; jellyfin.hostname and
+# audiobookshelf.hostname get routes of their own.
+httpRoute:
+  enabled: false
+  annotations: {}
+  parentRefs: []
+  # - name: main
+  #   namespace: networking

@@ -1,0 +1,183 @@
+{{- $component := "api" }}
+{{- $multi := or .Values.api.autoscaling.enabled (gt (int .Values.api.replicas) 1) }}
+{{- if and $multi (not (include "silo.dataShared" .)) }}
+{{- fail "more than one API pod needs persistence.data.accessModes to include ReadWriteMany: artwork, plugins and the Jellyfin web client live on that volume, and every API pod writes them" }}
+{{- end }}
+{{- if and $multi (not (include "silo.hasRedis" .)) }}
+{{- fail "more than one API pod needs Redis (redis.enabled or redis.existingSecret): sessions and events are shared through it" }}
+{{- end }}
+{{- $base := mergeOverwrite (include "silo.spread" (dict "root" $ "component" $component) | fromYaml) (dict "terminationGracePeriodSeconds" (add (int .Values.drainSeconds) 90)) }}
+{{- $pod := include "silo.mergePod" (dict "root" $ "base" $base "pod" .Values.api.pod) | fromYaml }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "silo.fullname" . }}
+  labels:
+    {{- include "silo.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  {{- if not .Values.api.autoscaling.enabled }}
+  replicas: {{ .Values.api.replicas }}
+  {{- end }}
+  {{- if not (include "silo.dataShared" .) }}
+  # The data volume attaches to one node at a time, so the old pod has to let
+  # go of it before the new one starts.
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "silo.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with $pod.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        checksum/settings: {{ toJson (list .Values.settings .Values.env .Values.secretSettings) | sha256sum | trunc 16 }}
+        {{- if .Values.transcode.enabled }}
+        checksum/transcode-nodes: {{ include "silo.transcodeNodesDocument" . | sha256sum | trunc 16 }}
+        {{- end }}
+      labels:
+        {{- include "silo.podLabels" (dict "root" $ "component" $component "pod" $pod) | nindent 8 }}
+    spec:
+      {{- with (include "silo.podSpec" $pod | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: silo
+          image: {{ include "silo.image" . }}
+          imagePullPolicy: {{ include "silo.imagePullPolicy" . }}
+          # The binary itself rather than the omnibus image's /init, which
+          # needs root and would start a PostgreSQL of its own.
+          command: ["silo"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.ports.http }}
+            - name: jellyfin
+              containerPort: {{ .Values.ports.jellyfin }}
+            - name: abs
+              containerPort: {{ .Values.ports.audiobookshelf }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+          env:
+            {{- include "silo.commonEnv" . | trim | nindent 12 }}
+            - name: MODE
+              value: api
+            - name: SILO_NODE_NAME
+              value: $(POD_NAME)
+            - name: JF_PORT
+              value: {{ .Values.ports.jellyfin | quote }}
+            - name: ABS_PORT
+              value: {{ .Values.ports.audiobookshelf | quote }}
+            - name: SILO_SHUTDOWN_DELAY
+              value: {{ printf "%ds" (int .Values.drainSeconds) | quote }}
+            {{- include "silo.secretKeyEnv" . | trim | nindent 12 }}
+            {{- include "silo.databaseEnv" . | trim | nindent 12 }}
+            {{- include "silo.redisEnv" . | trim | nindent 12 }}
+            {{- with .Values.hostname }}
+            - name: SILO_PUBLIC_URL
+              value: {{ printf "%s://%s" $.Values.scheme . | quote }}
+            {{- end }}
+            {{- with .Values.jellyfin.hostname }}
+            - name: SILO_JELLYFIN_PUBLIC_URL
+              value: {{ printf "%s://%s" $.Values.scheme . | quote }}
+            {{- end }}
+            {{- with .Values.trustedProxies }}
+            - name: SILO_TRUSTED_PROXIES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- if .Values.meilisearch.enabled }}
+            - name: SILO_SEARCH_PROVIDER
+              value: meilisearch
+            - name: SILO_MEILISEARCH_URL
+              value: {{ printf "http://%s:7700" (include "silo.svcHost" (dict "root" . "name" (printf "%s-meilisearch" (include "silo.fullname" .)))) | quote }}
+            - name: SILO_MEILISEARCH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "silo.meilisearchSecretName" . }}
+                  key: MEILI_MASTER_KEY
+            {{- end }}
+            {{- if .Values.transcode.enabled }}
+            - name: SILO_TRANSCODE_NODES_FILE
+              value: /etc/silo/transcode-nodes.yaml
+            {{- end }}
+            {{- range $name, $value := .Values.settings }}
+            - name: {{ $name }}
+              value: {{ toString $value | quote }}
+            {{- end }}
+          {{- with .Values.secretSettings.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: {{ .Values.api.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.api.startupProbe.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+          # Fails as soon as the pod is told to stop, while it keeps serving
+          # for drainSeconds, so gateways move on before it closes.
+          readinessProbe:
+            httpGet:
+              path: /api/v1/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+          {{- with .Values.api.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $pod.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            # /var/lib/silo in the image is a link to /config/silo.
+            - name: data
+              mountPath: /config/silo
+            - name: transcode
+              mountPath: /tmp/silo-transcode
+            - name: download-artifacts
+              mountPath: /tmp/silo-download-artifacts
+            {{- if .Values.transcode.enabled }}
+            - name: transcode-nodes
+              mountPath: /etc/silo/transcode-nodes.yaml
+              subPath: transcode-nodes.yaml
+              readOnly: true
+            - name: transcode-keys
+              mountPath: /run/silo/transcode-keys
+              readOnly: true
+            {{- end }}
+            {{- include "silo.mediaVolumeMount" . | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "silo.dataClaimName" . }}
+        - name: transcode
+          {{- include "silo.scratchVolume" .Values.persistence.transcode | trim | nindent 10 }}
+        - name: download-artifacts
+          {{- if .Values.persistence.downloadArtifacts.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "silo.downloadsClaimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.transcode.enabled }}
+        - name: transcode-nodes
+          configMap:
+            name: {{ include "silo.fullname" . }}-transcode-nodes
+        - name: transcode-keys
+          secret:
+            secretName: {{ include "silo.transcodeKeysSecretName" . }}
+            defaultMode: 0440
+        {{- end }}
+        {{- include "silo.mediaVolume" . | nindent 8 }}

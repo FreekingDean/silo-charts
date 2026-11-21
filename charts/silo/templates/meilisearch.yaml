@@ -1,0 +1,114 @@
+{{- if .Values.meilisearch.enabled }}
+{{- $component := "meilisearch" }}
+{{- $name := printf "%s-meilisearch" (include "silo.fullname" .) }}
+{{- $values := .Values.meilisearch }}
+{{- $pod := include "silo.mergePod" (dict "root" $ "base" (dict "terminationGracePeriodSeconds" 60) "pod" $values.pod) | fromYaml }}
+{{- if not $values.existingSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "silo.labels" (dict "root" $ "component" $component) | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  MEILI_MASTER_KEY: {{ include "silo.generated" (dict "root" $ "name" $name "key" "MEILI_MASTER_KEY" "length" 48) }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "silo.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $name }}
+  selector:
+    matchLabels:
+      {{- include "silo.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      {{- with $pod.annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "silo.podLabels" (dict "root" $ "component" $component "pod" $pod) | nindent 8 }}
+    spec:
+      {{- with (include "silo.podSpec" $pod | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: meilisearch
+          {{- include "silo.serviceImage" $values.image | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 7700
+          env:
+            - name: MEILI_ENV
+              value: production
+            - name: MEILI_DB_PATH
+              value: /meili_data/data.ms
+            - name: MEILI_DUMP_DIR
+              value: /meili_data/dumps
+            - name: MEILI_SNAPSHOT_DIR
+              value: /meili_data/snapshots
+            - name: MEILI_NO_ANALYTICS
+              value: "true"
+            - name: MEILI_UPGRADE_DB
+              value: {{ $values.upgradeDb | quote }}
+            - name: MEILI_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "silo.meilisearchSecretName" . }}
+                  key: MEILI_MASTER_KEY
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          {{- with $values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $pod.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /meili_data
+      {{- with $values.persistence.existingClaim }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ . }}
+      {{- end }}
+  {{- if not $values.persistence.existingClaim }}
+  volumeClaimTemplates:
+    {{- include "silo.claimTemplate" $values.persistence | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "silo.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  selector:
+    {{- include "silo.selectorLabels" (dict "root" $ "component" $component) | nindent 4 }}
+  ports:
+    - name: http
+      port: 7700
+      targetPort: http
+{{- end }}

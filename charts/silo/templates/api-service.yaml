@@ -1,0 +1,30 @@
+{{- $component := "api" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "silo.fullname" . }}
+  labels:
+    {{- include "silo.serviceLabels" (dict "root" $ "component" $component) | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "silo.selectorLabels" (dict "root" $ "component" $component) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+    - name: jellyfin
+      port: {{ .Values.ports.jellyfin }}
+      targetPort: jellyfin
+    - name: abs
+      port: {{ .Values.ports.audiobookshelf }}
+      targetPort: abs
+    {{- if .Values.metrics.enabled }}
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+    {{- end }}

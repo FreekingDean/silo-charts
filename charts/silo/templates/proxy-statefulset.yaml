@@ -1,0 +1,133 @@
+{{- if .Values.proxy.enabled }}
+{{- $component := "proxy" }}
+{{- if not (include "silo.hasRedis" .) }}
+{{- fail "proxy.enabled needs Redis (redis.enabled or redis.existingSecret): a proxy refuses to start without REDIS_URL" }}
+{{- end }}
+{{- $name := printf "%s-proxy" (include "silo.fullname" .) }}
+{{- $base := mergeOverwrite (include "silo.spread" (dict "root" $ "component" $component) | fromYaml) (dict "terminationGracePeriodSeconds" 60) }}
+{{- $pod := include "silo.mergePod" (dict "root" $ "base" $base "pod" .Values.proxy.pod) | fromYaml }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "silo.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  {{- if not .Values.proxy.autoscaling.enabled }}
+  replicas: {{ .Values.proxy.replicas }}
+  {{- end }}
+  # A proxy's identity is its own address, so each pod is a stable name
+  # behind the headless Service rather than one of many behind a VIP.
+  serviceName: {{ $name }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "silo.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      {{- with $pod.annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "silo.podLabels" (dict "root" $ "component" $component "pod" $pod) | nindent 8 }}
+    spec:
+      {{- with (include "silo.podSpec" $pod | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: silo
+          image: {{ include "silo.image" . }}
+          imagePullPolicy: {{ include "silo.imagePullPolicy" . }}
+          command: ["silo"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.ports.http }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+          env:
+            {{- include "silo.commonEnv" . | trim | nindent 12 }}
+            - name: MODE
+              value: proxy
+            - name: SILO_NODE_NAME
+              value: $(POD_NAME)
+            - name: SILO_NODE_URL
+              value: {{ printf "http://$(POD_NAME).%s:%v" (include "silo.svcHost" (dict "root" . "name" $name)) .Values.ports.http | quote }}
+            - name: SILO_NODE_REGISTER
+              value: "true"
+            {{- with .Values.proxy.publicUrl }}
+            - name: SILO_NODE_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.proxy.group }}
+            - name: SILO_NODE_GROUP
+              value: {{ . | quote }}
+            {{- end }}
+            - name: SILO_NODE_MAX_STREAMS
+              value: {{ .Values.proxy.maxStreams | quote }}
+            - name: SILO_NODE_MAX_BANDWIDTH_KBPS
+              value: {{ .Values.proxy.maxBandwidthKbps | quote }}
+            {{- include "silo.secretKeyEnv" . | trim | nindent 12 }}
+            {{- include "silo.databaseEnv" . | trim | nindent 12 }}
+            {{- include "silo.redisEnv" . | trim | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          {{- with .Values.proxy.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $pod.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: state
+              mountPath: /config/silo
+            - name: transcode
+              mountPath: /tmp/silo-transcode
+            {{- include "silo.mediaVolumeMount" . | nindent 12 }}
+      volumes:
+        - name: state
+          emptyDir: {}
+        - name: transcode
+          emptyDir: {}
+        {{- include "silo.mediaVolume" . | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "silo.serviceLabels" (dict "root" $ "component" $component) | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "silo.selectorLabels" (dict "root" $ "component" $component) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.ports.http }}
+      targetPort: http
+{{- end }}

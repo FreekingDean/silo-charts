@@ -1,0 +1,20 @@
+{{- $workloads := list
+  (dict "component" "api" "name" "" "enabled" true "values" .Values.api)
+  (dict "component" "proxy" "name" "-proxy" "enabled" .Values.proxy.enabled "values" .Values.proxy)
+  (dict "component" "transcode" "name" "-transcode" "enabled" .Values.transcode.enabled "values" .Values.transcode) }}
+{{- range $workloads }}
+{{- if and .enabled .values.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "silo.fullname" $ }}{{ .name }}
+  labels:
+    {{- include "silo.labels" (dict "root" $ "component" .component) | nindent 4 }}
+spec:
+  maxUnavailable: {{ .values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "silo.selectorLabels" (dict "root" $ "component" .component) | nindent 6 }}
+{{- end }}
+{{- end }}

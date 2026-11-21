@@ -1,0 +1,19 @@
+apiVersion: v2
+name: silo
+description: Silo split into its parts — API servers, proxy and transcode nodes, and PostgreSQL, Redis and Meilisearch of their own
+type: application
+# Placeholders for an unreleased checkout. A checkout defaults to latest; pin
+# image.tag when installing from one.
+version: 0.0.0
+appVersion: "latest"
+home: https://github.com/FreekingDean/silo-charts
+sources:
+  - https://github.com/FreekingDean/silo-charts
+  - https://github.com/Silo-Server/silo-server
+keywords:
+  - silo
+  - media
+  - jellyfin
+# 1.28 for the apps.kubernetes.io/pod-index label, which picks each transcode
+# node's key.
+kubeVersion: ">=1.28.0-0"
