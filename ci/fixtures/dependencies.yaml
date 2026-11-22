@@ -1,0 +1,73 @@
+# Test-only PostgreSQL (pgvector) and Redis for the silo chart's install test.
+# The chart deploys neither; a real install brings its own.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: silo-redis
+stringData:
+  REDIS_URL: redis://redis:6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg18
+          args: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
+          env:
+            - {name: POSTGRES_USER, value: silo}
+            - {name: POSTGRES_PASSWORD, value: silo}
+            - {name: POSTGRES_DB, value: silo}
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "silo", "-h", "127.0.0.1"]
+            periodSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector: {app: postgres}
+  ports:
+    - port: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  selector:
+    matchLabels: {app: redis}
+  template:
+    metadata:
+      labels: {app: redis}
+    spec:
+      containers:
+        - name: redis
+          image: redis:8.2-alpine
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector: {app: redis}
+  ports:
+    - port: 6379

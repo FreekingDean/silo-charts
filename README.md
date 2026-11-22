@@ -18,4 +18,4 @@ helm install silo charts/silo-omnibus \
 
 Back `SECRET_KEY` up apart from your database. Silo encrypts stored credentials under it, and nothing can recover them once it is lost.
 
-Run `./ci/test-charts.sh` to lint and render both charts the way CI does.
+Run `./ci/test-charts.sh` to lint and render both charts the way CI does. CI also installs each chart into minikube with `./ci/install-test.sh <chart>`, which works against any cluster your kubeconfig points at.
