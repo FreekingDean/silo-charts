@@ -241,12 +241,18 @@ nodes:
 
 {{- /*
 SILO_S3_<PREFIX>_* for one bucket. An ObjectBucketClaim's ConfigMap and Secret
-share its name; its endpoint is assembled from BUCKET_HOST and BUCKET_PORT.
+share its name; its endpoint is assembled from BUCKET_HOST and BUCKET_PORT. A
+COSI bucket's endpoint, bucket and keys come from the env file the cosi-env
+init container writes, so only the settings values hold are set here.
 */}}
 {{- define "silo.s3Env" -}}
 {{- $b := .bucket }}
 {{- $p := .prefix }}
-{{- if $b.objectBucketClaim }}
+{{- if and $b.cosiSecret $b.objectBucketClaim }}
+{{- fail (printf "objectStorage.%s takes objectBucketClaim or cosiSecret, not both" (lower $p)) }}
+{{- end }}
+{{- if $b.cosiSecret }}
+{{- else if $b.objectBucketClaim }}
 - name: SILO_OBC_{{ $p }}_HOST
   valueFrom:
     configMapKeyRef:
@@ -266,7 +272,7 @@ share its name; its endpoint is assembled from BUCKET_HOST and BUCKET_PORT.
       key: BUCKET_NAME
 {{- else }}
 {{- if not (and $b.endpoint $b.bucket $b.existingSecret) }}
-{{- fail (printf "objectStorage.%s needs objectBucketClaim, or endpoint, bucket and existingSecret" (lower $p)) }}
+{{- fail (printf "objectStorage.%s needs objectBucketClaim, cosiSecret, or endpoint, bucket and existingSecret" (lower $p)) }}
 {{- end }}
 - name: SILO_S3_{{ $p }}_ENDPOINT
   value: {{ $b.endpoint | quote }}
@@ -281,6 +287,7 @@ share its name; its endpoint is assembled from BUCKET_HOST and BUCKET_PORT.
 - name: SILO_S3_{{ $p }}_URL_AUTH
   value: {{ . | quote }}
 {{- end }}
+{{- if not $b.cosiSecret }}
 - name: SILO_S3_{{ $p }}_ACCESS_KEY
   valueFrom:
     secretKeyRef:
@@ -292,16 +299,84 @@ share its name; its endpoint is assembled from BUCKET_HOST and BUCKET_PORT.
       name: {{ default $b.objectBucketClaim $b.existingSecret }}
       key: {{ $b.secretKeyKey }}
 {{- end }}
+{{- end }}
+
+{{- /* The buckets objectStorage configures, as PREFIX: values, in order. */}}
+{{- define "silo.s3Buckets" -}}
+{{- $out := dict }}
+{{- if .Values.objectStorage.enabled }}
+{{- $_ := set $out "PUBLIC" .Values.objectStorage.public }}
+{{- with .Values.objectStorage.private }}
+{{- if or .objectBucketClaim .cosiSecret .endpoint }}
+{{- $_ := set $out "PRIVATE" . }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- toJson $out }}
+{{- end }}
 
 {{- define "silo.objectStorageEnv" -}}
 {{- if .Values.objectStorage.enabled }}
 - name: SILO_ARTWORK_STORAGE
   value: s3
-{{- include "silo.s3Env" (dict "prefix" "PUBLIC" "bucket" .Values.objectStorage.public) }}
-{{- with .Values.objectStorage.private }}
-{{- if or .objectBucketClaim .endpoint }}
-{{- include "silo.s3Env" (dict "prefix" "PRIVATE" "bucket" .) }}
+{{- range $p, $b := include "silo.s3Buckets" . | fromJson }}
+{{- include "silo.s3Env" (dict "prefix" $p "bucket" $b) }}
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{- /* The COSI buckets, as PREFIX: credentialsSecretName. */}}
+{{- define "silo.cosiBuckets" -}}
+{{- $out := dict }}
+{{- range $p, $b := include "silo.s3Buckets" . | fromJson }}
+{{- with $b.cosiSecret }}{{ $_ := set $out $p . }}{{ end }}
+{{- end }}
+{{- toJson $out }}
+{{- end }}
+
+{{- /*
+Turns each COSI BucketInfo into shell exports of SILO_S3_<PREFIX>_ENDPOINT,
+_BUCKET, _ACCESS_KEY and _SECRET_KEY in /run/silo/s3/env, which the API
+container sources before it runs silo. A missing field stops the pod here
+rather than leaving Silo half configured.
+*/}}
+{{- define "silo.cosiInitContainer" -}}
+{{- $root := .root }}
+{{- $image := $root.Values.objectStorage.cosi.image }}
+- name: cosi-env
+  image: {{ printf "%s:%s" $image.repository $image.tag }}
+  imagePullPolicy: {{ include "silo.pullPolicy" (dict "policy" $image.pullPolicy "tag" $image.tag) }}
+  command: ["/bin/sh", "-c"]
+  args:
+    - |
+      set -eu
+      out=/run/silo/s3/env
+      : > "$out"
+      put() {
+        v="$(yq -p json -o json -r "$3 // \"\"" "$1")"
+        if [ -z "$v" ]; then
+          echo "$1 has no $3" >&2
+          exit 1
+        fi
+        printf "export %s='%s'\n" "$2" "$(printf '%s' "$v" | sed "s/'/'\\\\''/g")" >> "$out"
+      }
+      {{- range $p, $_ := .buckets }}
+      f=/cosi/{{ lower $p }}/BucketInfo
+      put "$f" SILO_S3_{{ $p }}_ENDPOINT .spec.secretS3.endpoint
+      put "$f" SILO_S3_{{ $p }}_BUCKET .spec.bucketName
+      put "$f" SILO_S3_{{ $p }}_ACCESS_KEY .spec.secretS3.accessKeyID
+      put "$f" SILO_S3_{{ $p }}_SECRET_KEY .spec.secretS3.accessSecretKey
+      {{- end }}
+  {{- with .securityContext }}
+  securityContext:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  volumeMounts:
+    - name: s3-env
+      mountPath: /run/silo/s3
+    {{- range $p, $_ := .buckets }}
+    - name: cosi-{{ lower $p }}
+      mountPath: /cosi/{{ lower $p }}
+      readOnly: true
+    {{- end }}
 {{- end }}

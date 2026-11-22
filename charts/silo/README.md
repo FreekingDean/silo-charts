@@ -66,7 +66,7 @@ On SIGTERM the API fails `/api/v1/ready` at once and keeps serving for `drainSec
 
 The API keeps some state on disk at `/config/silo`: local artwork and other blobs, the plugin cache, and the Jellyfin web client. Two values move it off the pod:
 
-- `objectStorage` puts the blobs in S3-compatible buckets (`SILO_ARTWORK_STORAGE=s3`). `public` holds artwork, trickplay, markers, chapter images and downloaded subtitles; `private` holds avatars, diagnostics, job artifacts and backups at the default destination. Each bucket can be the name of a Rook/Ceph `ObjectBucketClaim`, whose ConfigMap and Secret supply the endpoint, bucket and keys.
+- `objectStorage` puts the blobs in S3-compatible buckets (`SILO_ARTWORK_STORAGE=s3`). `public` holds artwork, trickplay, markers, chapter images and downloaded subtitles; `private` holds avatars, diagnostics, job artifacts and backups at the default destination. Each bucket can be the name of a Rook/Ceph `ObjectBucketClaim`, whose ConfigMap and Secret supply the endpoint, bucket and keys, or a COSI `BucketAccess`'s `credentialsSecretName` (`cosiSecret`), whose `BucketInfo` document supplies them.
 - `persistence.data.enabled: false` mounts an `emptyDir` instead of a PVC.
 
 Together they make the API stateless, and more than one API pod no longer needs a `ReadWriteMany` volume. A restart then loses only two things: the plugin cache, which Silo rebuilds from the archives it keeps in PostgreSQL (`plugin_archives`), and the Jellyfin web client, which is built on the pod from source and has to be reinstalled from the admin settings (only needed for Jellyfin clients that use the web UI). Without `objectStorage`, an `emptyDir` also loses artwork, subtitles, avatars and default-destination backups on every restart.
@@ -81,6 +81,17 @@ objectStorage:
     objectBucketClaim: silo-public
   private:
     objectBucketClaim: silo-private
+```
+
+With COSI the bucket name is generated, so it cannot sit in values. A `cosi-env` init container (`objectStorage.cosi.image`, `mikefarah/yq` by default; any image with `sh` and `yq` works) reads `.spec.bucketName`, `.spec.secretS3.endpoint`, `.spec.secretS3.accessKeyID` and `.spec.secretS3.accessSecretKey` from each `BucketInfo` into a memory-backed file, and the API container sources that file before it runs `silo`. A field missing from `BucketInfo` stops the pod in the init container. Region, `pathStyle` and `urlAuth` still come from values; keep `pathStyle: true` for a gateway addressed by IP, such as Ceph RGW.
+
+```yaml
+objectStorage:
+  enabled: true
+  public:
+    cosiSecret: silo-public   # BucketAccess spec.credentialsSecretName
+  private:
+    cosiSecret: silo-private
 ```
 
 Point `objectStorage` at its buckets from the first install: once Silo has written to storage, moving it is a managed transition in Silo, not a values change.
@@ -177,7 +188,7 @@ Turning `transcode.enabled` off stops declaring nodes but leaves the ones alread
 | `media.mountPath`, `.volume`, `.extraVolumes` | `/mnt/media`, `{}`, `[]` | Media, read-only, at the same path in every pod that reads it. Empty `volume` is an `emptyDir` |
 | `persistence.data.enabled` | `true` | Off mounts an `emptyDir`; see [Stateless API](#stateless-api) |
 | `persistence.data.*` | 20Gi RWO | `/config/silo` (`/var/lib/silo`) on the API. Kept on uninstall |
-| `objectStorage.enabled`, `.public.*`, `.private.*` | off | S3-compatible buckets for Silo's blobs: `objectBucketClaim`, or `endpoint`, `bucket`, `region`, `pathStyle`, `existingSecret` with `accessKeyKey`/`secretKeyKey`; `public.urlAuth` |
+| `objectStorage.enabled`, `.public.*`, `.private.*` | off | S3-compatible buckets for Silo's blobs: `objectBucketClaim`, `cosiSecret` (read by `objectStorage.cosi.image`), or `endpoint`, `bucket`, `region`, `pathStyle`, `existingSecret` with `accessKeyKey`/`secretKeyKey`; `public.urlAuth` |
 | `persistence.transcode.sizeLimit` | `""` | The API's `/tmp/silo-transcode` `emptyDir` |
 | `persistence.downloadArtifacts.*` | off | The API's prepared downloads. Off is an `emptyDir` |
 

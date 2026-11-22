@@ -231,16 +231,28 @@ persistence:
 # downloaded subtitles (SILO_ARTWORK_STORAGE=s3, SILO_S3_PUBLIC_*). private
 # holds avatars, diagnostics, job artifacts and backups at the default
 # destination (SILO_S3_PRIVATE_*); without it those have nowhere to go.
-# Each bucket is either an ObjectBucketClaim's name, whose ConfigMap and Secret
-# give the endpoint, bucket and keys, or the fields below with a Secret you
-# create. Once Silo has written to storage, keep it pointing at the same place:
+# Each bucket is one of: an ObjectBucketClaim's name, whose ConfigMap and
+# Secret give the endpoint, bucket and keys; a COSI BucketAccess's
+# credentialsSecretName (cosiSecret), whose BucketInfo key gives them; or the
+# fields below with a Secret you create. Once Silo has written to storage, keep it pointing at the same place:
 # moving storage is a managed transition in Silo, not a values change.
 objectStorage:
   enabled: false
+  # Reads a COSI BucketInfo document before Silo starts: an init container
+  # writes the endpoint, bucket and keys to a memory-backed file, and the API
+  # container sources it before it runs silo. The image needs sh and yq.
+  cosi:
+    image:
+      repository: docker.io/mikefarah/yq
+      tag: "4.54.1"
+      pullPolicy: ""
   public:
     objectBucketClaim: ""
+    # A COSI BucketAccess's credentialsSecretName (objectstorage.k8s.io). Its
+    # bucket name is generated, so it comes from the Secret, not from values.
+    cosiSecret: ""
     # http(s)://host:port. Ignored with objectBucketClaim, which uses
-    # http://BUCKET_HOST:BUCKET_PORT.
+    # http://BUCKET_HOST:BUCKET_PORT, and with cosiSecret.
     endpoint: ""
     bucket: ""
     region: us-east-1
@@ -253,6 +265,7 @@ objectStorage:
     secretKeyKey: AWS_SECRET_ACCESS_KEY
   private:
     objectBucketClaim: ""
+    cosiSecret: ""
     endpoint: ""
     bucket: ""
     region: us-east-1

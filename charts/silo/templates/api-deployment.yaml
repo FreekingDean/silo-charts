@@ -8,6 +8,9 @@
 {{- end }}
 {{- $base := mergeOverwrite (include "silo.spread" (dict "root" $ "component" $component) | fromYaml) (dict "terminationGracePeriodSeconds" (add (int .Values.drainSeconds) 90)) }}
 {{- $pod := include "silo.mergePod" (dict "root" $ "base" $base "pod" .Values.api.pod) | fromYaml }}
+{{- $cosi := include "silo.cosiBuckets" . | fromJson }}
+{{- $initContainers := default list $pod.initContainers }}
+{{- $_ := unset $pod "initContainers" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -43,13 +46,27 @@ spec:
       {{- with (include "silo.podSpec" $pod | trim) }}
       {{- . | nindent 6 }}
       {{- end }}
+      {{- if or $initContainers $cosi }}
+      initContainers:
+        {{- with $initContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $cosi }}
+        {{- include "silo.cosiInitContainer" (dict "root" $ "buckets" $cosi "securityContext" $pod.containerSecurityContext) | trim | nindent 8 }}
+        {{- end }}
+      {{- end }}
       containers:
         - name: silo
           image: {{ include "silo.image" . }}
           imagePullPolicy: {{ include "silo.imagePullPolicy" . }}
           # The binary itself rather than the omnibus image's /init, which
           # needs root and would start a PostgreSQL of its own.
+          {{- if $cosi }}
+          # The COSI buckets' endpoints and keys, written by cosi-env.
+          command: ["/bin/sh", "-c", ". /run/silo/s3/env && exec silo"]
+          {{- else }}
           command: ["silo"]
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.ports.http }}
@@ -147,6 +164,11 @@ spec:
               mountPath: /run/silo/transcode-keys
               readOnly: true
             {{- end }}
+            {{- if $cosi }}
+            - name: s3-env
+              mountPath: /run/silo/s3
+              readOnly: true
+            {{- end }}
             {{- include "silo.mediaVolumeMount" . | nindent 12 }}
       volumes:
         - name: data
@@ -173,5 +195,17 @@ spec:
           secret:
             secretName: {{ include "silo.transcodeKeysSecretName" . }}
             defaultMode: 0440
+        {{- end }}
+        {{- if $cosi }}
+        - name: s3-env
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        {{- range $p, $secret := $cosi }}
+        - name: cosi-{{ lower $p }}
+          secret:
+            secretName: {{ $secret }}
+            defaultMode: 0440
+        {{- end }}
         {{- end }}
         {{- include "silo.mediaVolume" . | nindent 8 }}

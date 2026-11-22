@@ -74,6 +74,12 @@ render silo --set persistence.data.enabled=false --set api.replicas=3 --set redi
 render silo --set persistence.data.enabled=false --set objectStorage.enabled=true \
   --set objectStorage.public.endpoint=https://s3.example.test --set objectStorage.public.bucket=silo \
   --set objectStorage.public.existingSecret=silo-s3 --set objectStorage.public.urlAuth=presigned
+render silo --set persistence.data.enabled=false --set api.replicas=2 --set redis.existingSecret=silo-redis \
+  --set objectStorage.enabled=true --set objectStorage.public.cosiSecret=silo-public \
+  --set objectStorage.private.cosiSecret=silo-private \
+  --set-json 'api.pod={"initContainers":[{"name":"wait","image":"busybox:1.37","command":["true"]}]}'
+render silo --set objectStorage.enabled=true --set objectStorage.public.cosiSecret=silo-public \
+  --set objectStorage.private.objectBucketClaim=silo-private
 render silo --set api.autoscaling.enabled=true --set 'persistence.data.accessModes={ReadWriteMany}' \
   --set redis.existingSecret=silo-redis
 render silo --set hostname=silo.example.test --set jellyfin.hostname=jf.example.test \
@@ -89,6 +95,8 @@ refuses silo --set api.replicas=2 --set 'persistence.data.accessModes={ReadWrite
 refuses silo --set proxy.enabled=true
 refuses silo --set objectStorage.enabled=true
 refuses silo --set objectStorage.enabled=true --set objectStorage.public.endpoint=https://s3.example.test
+refuses silo --set objectStorage.enabled=true --set objectStorage.public.cosiSecret=silo-public \
+  --set objectStorage.public.objectBucketClaim=silo-public
 refuses silo --set transcode.enabled=true --set transcode.replicas=0
 refuses silo --set transcode.enabled=true --set transcode.sourceAccess=nfs
 refuses silo --set api.autoscaling.enabled=true --set 'persistence.data.accessModes={ReadWriteMany}' \
