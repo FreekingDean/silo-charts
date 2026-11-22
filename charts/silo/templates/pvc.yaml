@@ -1,5 +1,5 @@
 {{- $claims := list }}
-{{- if not .Values.persistence.data.existingClaim }}
+{{- if and .Values.persistence.data.enabled (not .Values.persistence.data.existingClaim) }}
 {{- $claims = append $claims (dict "name" (include "silo.dataClaimName" .) "values" .Values.persistence.data) }}
 {{- end }}
 {{- if and .Values.persistence.downloadArtifacts.enabled (not .Values.persistence.downloadArtifacts.existingClaim) }}

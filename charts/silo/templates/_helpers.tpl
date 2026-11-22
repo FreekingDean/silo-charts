@@ -214,7 +214,7 @@ emptyDir: {}
 {{- end }}
 
 {{- define "silo.dataShared" -}}
-{{- if has "ReadWriteMany" .Values.persistence.data.accessModes }}true{{ end }}
+{{- if or (not .Values.persistence.data.enabled) (has "ReadWriteMany" .Values.persistence.data.accessModes) }}true{{ end }}
 {{- end }}
 
 {{- define "silo.transcodeNodesDocument" -}}
@@ -237,4 +237,71 @@ nodes:
 {{- $pods = append $pods (printf "%s-proxy-%d" (include "silo.fullname" $) $i) }}
 {{- end }}
 {{- toJson $pods }}
+{{- end }}
+
+{{- /*
+SILO_S3_<PREFIX>_* for one bucket. An ObjectBucketClaim's ConfigMap and Secret
+share its name; its endpoint is assembled from BUCKET_HOST and BUCKET_PORT.
+*/}}
+{{- define "silo.s3Env" -}}
+{{- $b := .bucket }}
+{{- $p := .prefix }}
+{{- if $b.objectBucketClaim }}
+- name: SILO_OBC_{{ $p }}_HOST
+  valueFrom:
+    configMapKeyRef:
+      name: {{ $b.objectBucketClaim }}
+      key: BUCKET_HOST
+- name: SILO_OBC_{{ $p }}_PORT
+  valueFrom:
+    configMapKeyRef:
+      name: {{ $b.objectBucketClaim }}
+      key: BUCKET_PORT
+- name: SILO_S3_{{ $p }}_ENDPOINT
+  value: "http://$(SILO_OBC_{{ $p }}_HOST):$(SILO_OBC_{{ $p }}_PORT)"
+- name: SILO_S3_{{ $p }}_BUCKET
+  valueFrom:
+    configMapKeyRef:
+      name: {{ $b.objectBucketClaim }}
+      key: BUCKET_NAME
+{{- else }}
+{{- if not (and $b.endpoint $b.bucket $b.existingSecret) }}
+{{- fail (printf "objectStorage.%s needs objectBucketClaim, or endpoint, bucket and existingSecret" (lower $p)) }}
+{{- end }}
+- name: SILO_S3_{{ $p }}_ENDPOINT
+  value: {{ $b.endpoint | quote }}
+- name: SILO_S3_{{ $p }}_BUCKET
+  value: {{ $b.bucket | quote }}
+{{- end }}
+- name: SILO_S3_{{ $p }}_REGION
+  value: {{ $b.region | quote }}
+- name: SILO_S3_{{ $p }}_PATH_STYLE
+  value: {{ $b.pathStyle | quote }}
+{{- with $b.urlAuth }}
+- name: SILO_S3_{{ $p }}_URL_AUTH
+  value: {{ . | quote }}
+{{- end }}
+- name: SILO_S3_{{ $p }}_ACCESS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ default $b.objectBucketClaim $b.existingSecret }}
+      key: {{ $b.accessKeyKey }}
+- name: SILO_S3_{{ $p }}_SECRET_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ default $b.objectBucketClaim $b.existingSecret }}
+      key: {{ $b.secretKeyKey }}
+{{- end }}
+
+{{- define "silo.objectStorageEnv" -}}
+{{- if .Values.objectStorage.enabled }}
+- name: SILO_ARTWORK_STORAGE
+  value: s3
+{{- include "silo.s3Env" (dict "prefix" "PUBLIC" "bucket" .Values.objectStorage.public) }}
+{{- with .Values.objectStorage.private }}
+{{- if or .objectBucketClaim .endpoint }}
+{{- include "silo.s3Env" (dict "prefix" "PRIVATE" "bucket" .) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end }}

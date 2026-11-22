@@ -58,9 +58,32 @@ There is no migration Job: Silo migrates at API startup, under a lock, and backs
 
 ### API
 
-One replica by default. More need `persistence.data` to be `ReadWriteMany` (artwork, plugins and the Jellyfin web client live there and every API pod writes them) and Redis; the chart refuses to render either combination without them. With the data volume `ReadWriteOnce`, the Deployment uses `Recreate` so the new pod can attach it. Silo supports only one API replica while network access provider plugins (Tailscale and similar) are installed.
+One replica by default. More need Redis, and `persistence.data` either `ReadWriteMany` (artwork, plugins and the Jellyfin web client live there and every API pod writes them) or turned off for a [stateless API](#stateless-api); the chart refuses to render either combination without them. With the data volume `ReadWriteOnce`, the Deployment uses `Recreate` so the new pod can attach it. Silo supports only one API replica while network access provider plugins (Tailscale and similar) are installed.
 
 On SIGTERM the API fails `/api/v1/ready` at once and keeps serving for `drainSeconds` (`SILO_SHUTDOWN_DELAY`), so gateways move on before it closes. The grace period is `drainSeconds` plus 90 seconds, as upstream asks.
+
+### Stateless API
+
+The API keeps some state on disk at `/config/silo`: local artwork and other blobs, the plugin cache, and the Jellyfin web client. Two values move it off the pod:
+
+- `objectStorage` puts the blobs in S3-compatible buckets (`SILO_ARTWORK_STORAGE=s3`). `public` holds artwork, trickplay, markers, chapter images and downloaded subtitles; `private` holds avatars, diagnostics, job artifacts and backups at the default destination. Each bucket can be the name of a Rook/Ceph `ObjectBucketClaim`, whose ConfigMap and Secret supply the endpoint, bucket and keys.
+- `persistence.data.enabled: false` mounts an `emptyDir` instead of a PVC.
+
+Together they make the API stateless, and more than one API pod no longer needs a `ReadWriteMany` volume. A restart then loses only two things: the plugin cache, which Silo rebuilds from the archives it keeps in PostgreSQL (`plugin_archives`), and the Jellyfin web client, which is built on the pod from source and has to be reinstalled from the admin settings (only needed for Jellyfin clients that use the web UI). Without `objectStorage`, an `emptyDir` also loses artwork, subtitles, avatars and default-destination backups on every restart.
+
+```yaml
+persistence:
+  data:
+    enabled: false
+objectStorage:
+  enabled: true
+  public:
+    objectBucketClaim: silo-public
+  private:
+    objectBucketClaim: silo-private
+```
+
+Point `objectStorage` at its buckets from the first install: once Silo has written to storage, moving it is a managed transition in Silo, not a values change.
 
 ### Proxy nodes
 
@@ -152,7 +175,9 @@ Turning `transcode.enabled` off stops declaring nodes but leaves the ones alread
 | Value | Default | Description |
 |---|---|---|
 | `media.mountPath`, `.volume`, `.extraVolumes` | `/mnt/media`, `{}`, `[]` | Media, read-only, at the same path in every pod that reads it. Empty `volume` is an `emptyDir` |
+| `persistence.data.enabled` | `true` | Off mounts an `emptyDir`; see [Stateless API](#stateless-api) |
 | `persistence.data.*` | 20Gi RWO | `/config/silo` (`/var/lib/silo`) on the API. Kept on uninstall |
+| `objectStorage.enabled`, `.public.*`, `.private.*` | off | S3-compatible buckets for Silo's blobs: `objectBucketClaim`, or `endpoint`, `bucket`, `region`, `pathStyle`, `existingSecret` with `accessKeyKey`/`secretKeyKey`; `public.urlAuth` |
 | `persistence.transcode.sizeLimit` | `""` | The API's `/tmp/silo-transcode` `emptyDir` |
 | `persistence.downloadArtifacts.*` | off | The API's prepared downloads. Off is an `emptyDir` |
 

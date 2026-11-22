@@ -201,9 +201,15 @@ api:
   pod: {}
 
 persistence:
-  # /config/silo (= /var/lib/silo): artwork, plugins, the Jellyfin web client.
-  # The API's state outside the database.
+  # /config/silo (= /var/lib/silo) on the API: local artwork and other blobs
+  # (unless objectStorage holds them), the plugin cache, and the Jellyfin web
+  # client. The API's state outside the database.
+  # Off mounts an emptyDir, so the API is stateless: with objectStorage on, a
+  # restart loses only the plugin cache, which Silo rebuilds from the database,
+  # and the Jellyfin web client, which an administrator reinstalls. More than
+  # one API pod then needs no ReadWriteMany volume.
   data:
+    enabled: true
     existingClaim: ""
     storageClass: ""
     accessModes: [ReadWriteOnce]
@@ -219,6 +225,41 @@ persistence:
     storageClass: ""
     accessModes: [ReadWriteOnce]
     size: 50Gi
+
+# S3-compatible object storage for the blobs Silo owns, in place of
+# /config/silo. public holds artwork, trickplay, markers, chapter images and
+# downloaded subtitles (SILO_ARTWORK_STORAGE=s3, SILO_S3_PUBLIC_*). private
+# holds avatars, diagnostics, job artifacts and backups at the default
+# destination (SILO_S3_PRIVATE_*); without it those have nowhere to go.
+# Each bucket is either an ObjectBucketClaim's name, whose ConfigMap and Secret
+# give the endpoint, bucket and keys, or the fields below with a Secret you
+# create. Once Silo has written to storage, keep it pointing at the same place:
+# moving storage is a managed transition in Silo, not a values change.
+objectStorage:
+  enabled: false
+  public:
+    objectBucketClaim: ""
+    # http(s)://host:port. Ignored with objectBucketClaim, which uses
+    # http://BUCKET_HOST:BUCKET_PORT.
+    endpoint: ""
+    bucket: ""
+    region: us-east-1
+    pathStyle: true
+    # SILO_S3_PUBLIC_URL_AUTH: presigned, public or cloudflare_token. Empty
+    # keeps Silo's default.
+    urlAuth: ""
+    existingSecret: ""
+    accessKeyKey: AWS_ACCESS_KEY_ID
+    secretKeyKey: AWS_SECRET_ACCESS_KEY
+  private:
+    objectBucketClaim: ""
+    endpoint: ""
+    bucket: ""
+    region: us-east-1
+    pathStyle: true
+    existingSecret: ""
+    accessKeyKey: AWS_ACCESS_KEY_ID
+    secretKeyKey: AWS_SECRET_ACCESS_KEY
 
 # MODE=proxy: stream egress nodes. Players are sent to a proxy for the stream
 # itself, so playback bandwidth, remuxing and direct play leave the API pods.
