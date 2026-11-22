@@ -22,9 +22,9 @@ The transcode nodes read their keys from the Secret {{ include "silo.transcodeKe
     --from-literal {{ $i }}="$(docker run --rm --entrypoint silo {{ include "silo.image" $ }} node-key generate --id {{ add 1001 $i }})"{{ if lt (add $i 1) (int $.Values.transcode.replicas) }} \{{ end }}
 {{- end }}
 {{- end }}
-{{- if and .Values.proxy.enabled (not .Values.proxy.publicUrl) }}
+{{- if and .Values.proxy.enabled (not .Values.proxy.publicUrl) (not .Values.proxy.domain) }}
 
-proxy.publicUrl is empty, so players are handed each proxy's in-cluster address. Only players inside the cluster network can reach it.
+proxy.domain and proxy.publicUrl are empty, so players are handed each proxy's in-cluster address. Only players inside the cluster network can reach it.
 {{- end }}
 {{- if not .Values.httpRoute.enabled }}
 

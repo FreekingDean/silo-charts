@@ -232,11 +232,17 @@ proxy:
   enabled: false
   # Ignored while autoscaling is enabled.
   replicas: 2
-  # SILO_NODE_PUBLIC_URL, the address players are handed. Each proxy needs its
-  # own, so $(POD_NAME) is expanded per pod:
-  #   https://$(POD_NAME).stream.example.com
-  # Empty hands players the in-cluster address, which only works for players
-  # inside the cluster network.
+  # The domain each proxy pod is published under. Players stream from one
+  # proxy, so each pod gets its own name, <pod>.<domain> (for example
+  # silo-proxy-0.stream.example.com), its own Service, and, with httpRoute
+  # enabled, its own HTTPRoute. SILO_NODE_PUBLIC_URL becomes
+  # <scheme>://<pod>.<domain>. A wildcard DNS record and certificate for
+  # *.<domain> on the Gateway cover every pod. With autoscaling, routes are
+  # rendered up to maxReplicas. Empty publishes nothing, and players are handed
+  # the in-cluster address, which only players inside the cluster can reach.
+  domain: ""
+  # SILO_NODE_PUBLIC_URL as written, in place of the one domain builds, for
+  # proxies published some other way. $(POD_NAME) is expanded per pod.
   publicUrl: ""
   # SILO_NODE_GROUP, SILO_NODE_MAX_STREAMS, SILO_NODE_MAX_BANDWIDTH_KBPS.
   group: ""

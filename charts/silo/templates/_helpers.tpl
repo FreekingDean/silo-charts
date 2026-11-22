@@ -227,3 +227,14 @@ nodes:
       fromFile: {{ printf "/run/silo/transcode-keys/%d" $i }}
 {{- end }}
 {{- end }}
+
+{{- /* Proxy pod names a per-pod Service and route are rendered for. */}}
+{{- define "silo.proxyPods" -}}
+{{- $count := int .Values.proxy.replicas }}
+{{- if .Values.proxy.autoscaling.enabled }}{{ $count = int .Values.proxy.autoscaling.maxReplicas }}{{ end }}
+{{- $pods := list }}
+{{- range $i := until $count }}
+{{- $pods = append $pods (printf "%s-proxy-%d" (include "silo.fullname" $) $i) }}
+{{- end }}
+{{- toJson $pods }}
+{{- end }}

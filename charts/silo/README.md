@@ -66,14 +66,24 @@ On SIGTERM the API fails `/api/v1/ready` at once and keeps serving for `drainSec
 
 A proxy is a playback-only Silo. The API decides what a player gets and then hands it a stream URL on a proxy, so the bytes (direct play, remux, downloads) flow from proxy pods instead of the API pods. They let streaming bandwidth scale, or sit closer to the players, without adding API replicas. They are off by default: a single API pod streams itself, as the omnibus image does.
 
-Proxies stream to players directly. Each pod's identity is its own address, `http://<pod>.<fullname>-proxy.<namespace>.svc.<clusterDomain>:8080`, behind a headless Service, and it registers itself (`SILO_NODE_REGISTER=true`) with its pod name as its node name. Players are handed `SILO_NODE_PUBLIC_URL`, which has to reach that one pod. Set `proxy.publicUrl` with `$(POD_NAME)` in it, which Kubernetes expands per pod, and give each pod a route of its own:
+Proxies stream to players directly, and a player keeps talking to the proxy it was handed, so each pod is published on its own. Each pod's identity is its own address, `http://<pod>.<fullname>-proxy.<namespace>.svc.<clusterDomain>:8080`, behind a headless Service, and it registers itself (`SILO_NODE_REGISTER=true`) with its pod name as its node name.
+
+Set `proxy.domain` and each pod `<pod>` is published as `<pod>.<domain>`: the chart gives it a Service of its own (selecting `statefulset.kubernetes.io/pod-name`), an HTTPRoute when `httpRoute.enabled`, and `SILO_NODE_PUBLIC_URL=<scheme>://<pod>.<domain>`. A wildcard DNS record and a wildcard certificate for `*.<domain>` on the Gateway cover every pod. With autoscaling on, Services and routes are rendered up to `proxy.autoscaling.maxReplicas`, so a pod that scales in leaves an idle route behind rather than a new pod with none.
 
 ```yaml
+redis:
+  existingSecret: silo-redis
 proxy:
   enabled: true
   replicas: 2
-  publicUrl: https://$(POD_NAME).stream.example.com
+  domain: stream.example.com   # silo-proxy-0.stream.example.com, silo-proxy-1...
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: my-gateway
 ```
+
+To publish proxies some other way (a LoadBalancer per pod, an external proxy), leave `domain` empty and set `proxy.publicUrl`, in which `$(POD_NAME)` expands per pod.
 
 Proxies need the database, Redis and `SECRET_KEY`. They do not drain: a proxy holds no session it could finish on its own.
 
@@ -154,7 +164,8 @@ Turning `transcode.enabled` off stops declaring nodes but leaves the ones alread
 | `api.startupProbe.*` | `15`, `90` | Covers the 20-minute migration budget |
 | `api.resources`, `.autoscaling.*`, `.podDisruptionBudget.*`, `.pod` | | As in gojellyfin. Autoscaling needs `resources.requests.cpu` |
 | `proxy.enabled`, `.replicas` | `false`, `2` | |
-| `proxy.publicUrl` | `""` | `SILO_NODE_PUBLIC_URL`; `$(POD_NAME)` expands per pod |
+| `proxy.domain` | `""` | Publish each pod as `<pod>.<domain>`: a Service, an HTTPRoute and `SILO_NODE_PUBLIC_URL` per pod |
+| `proxy.publicUrl` | `""` | `SILO_NODE_PUBLIC_URL` as written, instead of `domain`; `$(POD_NAME)` expands per pod |
 | `proxy.group`, `.maxStreams`, `.maxBandwidthKbps` | `""`, `0`, `0` | `SILO_NODE_GROUP`, `SILO_NODE_MAX_STREAMS`, `SILO_NODE_MAX_BANDWIDTH_KBPS` |
 | `proxy.resources`, `.autoscaling.*`, `.podDisruptionBudget.*`, `.pod` | | |
 | `transcode.enabled`, `.replicas` | `false`, `1` | |

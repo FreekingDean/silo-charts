@@ -57,9 +57,12 @@ spec:
               value: {{ printf "http://$(POD_NAME).%s:%v" (include "silo.svcHost" (dict "root" . "name" $name)) .Values.ports.http | quote }}
             - name: SILO_NODE_REGISTER
               value: "true"
-            {{- with .Values.proxy.publicUrl }}
+            {{- if .Values.proxy.publicUrl }}
             - name: SILO_NODE_PUBLIC_URL
-              value: {{ . | quote }}
+              value: {{ .Values.proxy.publicUrl | quote }}
+            {{- else if .Values.proxy.domain }}
+            - name: SILO_NODE_PUBLIC_URL
+              value: {{ printf "%s://$(POD_NAME).%s" .Values.scheme .Values.proxy.domain | quote }}
             {{- end }}
             {{- with .Values.proxy.group }}
             - name: SILO_NODE_GROUP
@@ -130,4 +133,30 @@ spec:
     - name: http
       port: {{ .Values.ports.http }}
       targetPort: http
+{{- if .Values.proxy.domain }}
+{{- range (include "silo.proxyPods" . | fromJsonArray) }}
+---
+# One proxy pod alone, for its public route: a player keeps talking to the
+# proxy it was handed.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ . }}
+  labels:
+    {{- include "silo.serviceLabels" (dict "root" $ "component" $component) | nindent 4 }}
+  {{- with $.Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $.Values.service.type }}
+  selector:
+    {{- include "silo.selectorLabels" (dict "root" $ "component" $component) | nindent 4 }}
+    statefulset.kubernetes.io/pod-name: {{ . }}
+  ports:
+    - name: http
+      port: {{ $.Values.service.port }}
+      targetPort: http
+{{- end }}
+{{- end }}
 {{- end }}

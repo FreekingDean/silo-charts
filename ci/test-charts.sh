@@ -62,6 +62,10 @@ render silo --set transcode.enabled=true --set transcode.sourceAccess=core
 render silo --set redis.existingSecret=silo-redis --set proxy.enabled=true \
   --set 'proxy.publicUrl=https://$(POD_NAME).stream.example.test' \
   --set proxy.autoscaling.enabled=true --set proxy.podDisruptionBudget.enabled=true
+render silo --set redis.existingSecret=silo-redis --set proxy.enabled=true --set proxy.domain=stream.example.test \
+  --set hostname=silo.example.test --set httpRoute.enabled=true --set 'httpRoute.parentRefs[0].name=gateway'
+render silo --set redis.existingSecret=silo-redis --set proxy.enabled=true --set proxy.domain=stream.example.test \
+  --set proxy.autoscaling.enabled=true --set httpRoute.enabled=true --set 'httpRoute.parentRefs[0].name=gateway'
 render silo --set api.replicas=2 --set 'persistence.data.accessModes={ReadWriteMany}' \
   --set redis.existingSecret=silo-redis --set api.podDisruptionBudget.enabled=true
 render silo --set api.autoscaling.enabled=true --set 'persistence.data.accessModes={ReadWriteMany}' \
