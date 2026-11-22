@@ -19,3 +19,17 @@ helm install silo charts/silo-omnibus \
 Back `SECRET_KEY` up apart from your database. Silo encrypts stored credentials under it, and nothing can recover them once it is lost.
 
 Run `./ci/test-charts.sh` to lint and render both charts the way CI does. CI also installs each chart into minikube with `./ci/install-test.sh <chart>`, which works against any cluster your kubeconfig points at.
+
+## Releases
+
+Every merge to `main` is a release. Pull request titles must start with `patch: `, `minor: ` or `major: ` (checked by `.github/workflows/pr-title.yml`), and on merge `.github/workflows/release.yml` bumps the latest `vX.Y.Z` tag by that part, packages both charts at the new version, pushes them to `oci://ghcr.io/freekingdean/charts`, and creates the tag and a GitHub release.
+
+- `patch:` fixes that change nothing for an existing install.
+- `minor:` new values or behaviour that existing installs keep working with.
+- `major:` anything an existing install has to change for: renamed or removed values, new required Secrets, a different image layout.
+
+```sh
+helm install silo oci://ghcr.io/freekingdean/charts/silo-omnibus --version <version>
+```
+
+The charts' `appVersion` stays `latest`, because Silo's image is released on its own schedule; pin `image.tag` to a `build-N` tag for a reproducible install.
