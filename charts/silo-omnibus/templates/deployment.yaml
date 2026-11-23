@@ -1,0 +1,174 @@
+{{- $pod := mergeOverwrite (dict "terminationGracePeriodSeconds" (int .Values.terminationGracePeriodSeconds)) (deepCopy (default dict .Values.pod)) }}
+{{- $csc := deepCopy (default dict $pod.containerSecurityContext) }}
+{{- if .Values.netAdmin }}
+{{- $caps := default dict $csc.capabilities }}
+{{- $_ := set $caps "add" (uniq (concat (default list $caps.add) (list "NET_ADMIN"))) }}
+{{- $_ := set $csc "capabilities" $caps }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "silo-omnibus.fullname" . }}
+  labels:
+    {{- include "silo-omnibus.labels" . | nindent 4 }}
+spec:
+  # One pod, always: PostgreSQL lives inside it, and a second pod on the same
+  # /config would be refused its lock. Recreate stops the old pod before the
+  # new one mounts the volume.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "silo-omnibus.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with $pod.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        checksum/settings: {{ toJson (list .Values.settings .Values.env .Values.secretSettings) | sha256sum | trunc 16 }}
+      labels:
+        {{- include "silo-omnibus.podLabels" (dict "root" $ "pod" $pod) | nindent 8 }}
+    spec:
+      {{- with (include "silo-omnibus.podSpec" $pod | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: silo
+          image: {{ include "silo-omnibus.image" . }}
+          imagePullPolicy: {{ include "silo-omnibus.imagePullPolicy" . }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.ports.http }}
+            - name: jellyfin
+              containerPort: {{ .Values.ports.jellyfin }}
+            - name: abs
+              containerPort: {{ .Values.ports.audiobookshelf }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+          env:
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            - name: PORT
+              value: {{ .Values.ports.http | quote }}
+            - name: JF_PORT
+              value: {{ .Values.ports.jellyfin | quote }}
+            - name: ABS_PORT
+              value: {{ .Values.ports.audiobookshelf | quote }}
+            - name: PUID
+              value: {{ .Values.puid | quote }}
+            - name: PGID
+              value: {{ .Values.pgid | quote }}
+            - name: TZ
+              value: {{ default "Etc/UTC" .Values.timeZone | quote }}
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "silo-omnibus.secretKeySecretName" . }}
+                  key: {{ .Values.secretKey.secretKey }}
+            - name: ENABLE_REDIS
+              value: {{ .Values.bundled.redis | quote }}
+            - name: ENABLE_MEILISEARCH
+              value: {{ .Values.bundled.meilisearch | quote }}
+            {{- with .Values.bundled.meilisearchMasterKey.existingSecret }}
+            - name: MEILI_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.bundled.meilisearchMasterKey.secretKey }}
+            {{- end }}
+            {{- with (include "silo-omnibus.publicUrl" .) }}
+            - name: SILO_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.jellyfin.hostname }}
+            - name: SILO_JELLYFIN_PUBLIC_URL
+              value: {{ printf "%s://%s" $.Values.scheme . | quote }}
+            {{- end }}
+            {{- with .Values.trustedProxies }}
+            - name: SILO_TRUSTED_PROXIES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- if .Values.metrics.enabled }}
+            - name: SILO_METRICS_LISTEN
+              value: {{ printf ":%v" .Values.metrics.port | quote }}
+            {{- end }}
+            {{- range $name, $value := .Values.settings }}
+            - name: {{ $name }}
+              value: {{ toString $value | quote }}
+            {{- end }}
+          {{- with .Values.secretSettings.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $csc }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: transcode
+              mountPath: /tmp/silo-transcode
+            - name: download-artifacts
+              mountPath: /tmp/silo-download-artifacts
+            {{- if .Values.persistence.catalogSeeds }}
+            - name: catalog-seeds
+              mountPath: /catalog-seeds
+              readOnly: true
+            {{- end }}
+            {{- include "silo-omnibus.mediaVolumeMount" . | nindent 12 }}
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: {{ include "silo-omnibus.configClaimName" . }}
+        - name: transcode
+          {{- if .Values.persistence.transcode.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.transcode.existingClaim }}
+          {{- else if .Values.persistence.transcode.sizeLimit }}
+          emptyDir:
+            sizeLimit: {{ .Values.persistence.transcode.sizeLimit }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: download-artifacts
+          {{- if .Values.persistence.downloadArtifacts.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "silo-omnibus.downloadsClaimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- with .Values.persistence.catalogSeeds }}
+        - name: catalog-seeds
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- include "silo-omnibus.mediaVolume" . | nindent 8 }}

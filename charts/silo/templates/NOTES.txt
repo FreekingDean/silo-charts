@@ -1,0 +1,43 @@
+{{ .Chart.Name }} {{ .Chart.Version }} is installed as {{ .Release.Name }}.
+
+The web app answers on http://{{ include "silo.fullname" . }}.{{ .Release.Namespace }}:{{ .Values.service.port }}, or:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "silo.fullname" . }} 8080:{{ .Values.service.port }}
+
+Open it to finish first-run setup. Jellyfin-compatible clients use port {{ .Values.ports.jellyfin }} and Audiobookshelf ones port {{ .Values.ports.audiobookshelf }} of the same Service.
+
+SECRET_KEY comes from the Secret {{ include "silo.secretKeySecretName" . }}, key {{ .Values.secretKey.secretKey }}. Nothing starts without it. Create it before the pods start, and back the key up apart from the database:
+
+  kubectl --namespace {{ .Release.Namespace }} create secret generic {{ include "silo.secretKeySecretName" . }} \
+    --from-literal {{ .Values.secretKey.secretKey }}="$(openssl rand -base64 48)"
+
+DATABASE_URL comes from the Secret {{ include "silo.databaseSecretName" . }}, key {{ .Values.database.secretKey }}, and must name a PostgreSQL with pgvector.
+{{- if .Values.redis.existingSecret }} REDIS_URL comes from {{ .Values.redis.existingSecret }}, key {{ .Values.redis.secretKey }}.{{ else }} No Redis is configured, so Watch Party rooms are off.{{ end }}
+{{- if .Values.transcode.enabled }}
+
+The transcode nodes read their keys from the Secret {{ include "silo.transcodeKeysSecretName" . }}, one per pod under its ordinal. Generate them with the same image, choosing ids no node has used:
+
+  kubectl --namespace {{ .Release.Namespace }} create secret generic {{ include "silo.transcodeKeysSecretName" . }} \
+{{- range $i := until (int .Values.transcode.replicas) }}
+    --from-literal {{ $i }}="$(docker run --rm --entrypoint silo {{ include "silo.image" $ }} node-key generate --id {{ add 1001 $i }})"{{ if lt (add $i 1) (int $.Values.transcode.replicas) }} \{{ end }}
+{{- end }}
+{{- end }}
+{{- if and .Values.proxy.enabled (not .Values.proxy.publicUrl) (not .Values.proxy.domain) }}
+
+proxy.domain and proxy.publicUrl are empty, so players are handed each proxy's in-cluster address. Only players inside the cluster network can reach it.
+{{- end }}
+{{- if not .Values.httpRoute.enabled }}
+
+httpRoute.enabled is false, so nothing outside the cluster reaches this release yet.
+{{- end }}
+{{- if not .Values.media.volume }}
+
+media.volume is empty, so the pods mounted an emptyDir — a library with nothing in it. Point it at the volume the media already lives on.
+{{- end }}
+{{- if not .Values.persistence.data.enabled }}
+
+persistence.data.enabled is false, so /config/silo is an emptyDir. A restart loses the plugin cache (rebuilt from the database) and the Jellyfin web client (reinstall it in the admin settings).
+{{- $storageEnv := false }}
+{{- range .Values.api.env }}{{ if eq .name "SILO_ARTWORK_STORAGE" }}{{ $storageEnv = true }}{{ end }}{{ end }}
+{{- if not (or .Values.objectStorage.enabled $storageEnv (hasKey .Values.settings "SILO_ARTWORK_STORAGE")) }} objectStorage is off too, so artwork, trickplay, subtitles, avatars and backups at the default destination are lost with the pod.{{ end }}
+{{- end }}

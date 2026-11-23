@@ -1,0 +1,194 @@
+nameOverride: ""
+fullnameOverride: ""
+
+# The name clients reach the server by. The routes match it and
+# SILO_PUBLIC_URL advertises <scheme>://<hostname>. Empty sets no public URL,
+# and Silo falls back to the address it sees itself at.
+hostname: ""
+# What the gateway in front of this listens on, and the only thing it is used
+# for: advertising https over a plain listener loses a client as surely as
+# advertising the wrong hostname.
+scheme: https
+
+# The Jellyfin/Emby-compatible listener (8096) and the Audiobookshelf one
+# (13378) are separate ports on the same pod. Each gets its own hostname on the
+# route when one is set here; empty leaves that listener reachable only through
+# the Service. jellyfin.hostname is also advertised as SILO_JELLYFIN_PUBLIC_URL.
+jellyfin:
+  hostname: ""
+audiobookshelf:
+  hostname: ""
+
+image:
+  # The omnibus image: Silo plus PostgreSQL, Redis and Meilisearch under
+  # s6-overlay. Its /init needs root, so this chart never sets runAsUser.
+  repository: ghcr.io/silo-server/silo-server
+  # Empty takes the chart's appVersion. Pin a build-N tag for anything you care
+  # about: PostgreSQL's major version is part of the image, and the image
+  # refuses a data directory written by another one.
+  tag: ""
+  # Empty is Always for a tag that moves and IfNotPresent for one that does not.
+  pullPolicy: ""
+
+# SECRET_KEY, the master key Silo encrypts stored credentials under. Silo
+# refuses to start without it, and nothing can recover the secrets it protects
+# once it is lost, so the chart never generates one: create the Secret
+# yourself and back the key up apart from the database.
+#   kubectl create secret generic <release fullname> \
+#     --from-literal SECRET_KEY="$(openssl rand -base64 48)"
+# Empty names a Secret with the release's own fullname.
+secretKey:
+  existingSecret: ""
+  secretKey: SECRET_KEY
+
+# PUID and PGID, the account the image runs Silo as and hands /config/silo to.
+# It needs read access to the media.
+puid: 1000
+pgid: 1000
+
+# TZ. Empty is Etc/UTC.
+timeZone: ""
+
+# SILO_TRUSTED_PROXIES: the networks the gateway's pods sit in, usually the pod
+# CIDR. Empty keeps Silo's default, RFC 1918 ranges and loopback.
+trustedProxies: []
+
+# The bundled services. PostgreSQL always runs. Redis is on, as
+# docker-compose.yml runs it: Watch Party rooms need it. Meilisearch is off.
+bundled:
+  redis: true
+  meilisearch: false
+  # MEILI_MASTER_KEY out of a Secret you create. Empty lets the image generate
+  # one on first start and keep it under /config.
+  meilisearchMasterKey:
+    existingSecret: ""
+    secretKey: MEILI_MASTER_KEY
+
+# Server settings from the environment, as .env.example lists them
+# (SILO_SMTP_HOST, SILO_TMDB_API_KEY, POSTGRES_TUNE, ...). While one is set the
+# admin UI shows that setting read-only.
+settings: {}
+  # SILO_SERVER_NAME: Silo
+  # SILO_SIGNUP_ENABLED: "false"
+
+# Settings that are secrets (SILO_SMTP_PASSWORD, SILO_TMDB_API_KEY, ...), out of
+# a Secret you create whose keys are the variable names.
+secretSettings:
+  existingSecret: ""
+
+# Extra container env, in Kubernetes' own shape. It comes first, so a later
+# value can refer to one of these as $(NAME).
+env: []
+
+# The media, mounted from wherever it already lives, read-only as
+# docker-compose.yml mounts it.
+media:
+  mountPath: /mnt/media
+  # Any volume source: persistentVolumeClaim, nfs, hostPath. Empty mounts an
+  # emptyDir, which is a library with nothing in it.
+  volume: {}
+  # More media beside it, each a name, a mountPath and a volume source.
+  extraVolumes: []
+  # - name: books
+  #   mountPath: /mnt/books
+  #   volume:
+  #     nfs: {server: nas.lan, path: /books}
+
+persistence:
+  # /config: Silo's state, the PostgreSQL cluster, and the Redis and
+  # Meilisearch data. This is the volume to back up.
+  config:
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 20Gi
+    annotations: {}
+  # /tmp/silo-transcode. Segments are scratch; an emptyDir is fine unless the
+  # node's disk is small. sizeLimit bounds it.
+  transcode:
+    existingClaim: ""
+    sizeLimit: ""
+  # /tmp/silo-download-artifacts, prepared downloads. Off is an emptyDir, so
+  # prepared files are lost with the pod; enable to keep them across restarts.
+  downloadArtifacts:
+    enabled: false
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 50Gi
+  # /catalog-seeds, mounted read-only. Any volume source; empty mounts nothing.
+  catalogSeeds: {}
+
+# Ports the container listens on. They are fixed in the image's compose file;
+# changing one here moves the listener and everything that points at it.
+ports:
+  http: 8080
+  jellyfin: 8096
+  audiobookshelf: 13378
+
+# SILO_METRICS_LISTEN, the opt-in Prometheus listener. Off exposes no /metrics.
+metrics:
+  enabled: false
+  port: 9090
+
+# NET_ADMIN lets Silo use BBR and a larger send buffer on client connections.
+# Pod Security baseline and restricted refuse it; turn it off there, and Silo
+# logs the TCP limits it cannot change.
+netAdmin: true
+
+# The pod's stop timeout. On SIGTERM Silo fails readiness, keeps serving for
+# SILO_SHUTDOWN_DELAY, finishes in-flight requests, and PostgreSQL stops after
+# it. docker-compose.yml gives it 2m.
+terminationGracePeriodSeconds: 120
+
+# Silo migrates its database before it listens, for up to
+# SILO_MIGRATE_TIMEOUT (20m). The startup probe covers that, so a migrating
+# pod is not restarted mid-migration. Raise it with SILO_MIGRATE_TIMEOUT.
+startupProbe:
+  periodSeconds: 15
+  failureThreshold: 90
+
+service:
+  type: ClusterIP
+  # The port the Service answers http on. Jellyfin and Audiobookshelf keep
+  # their own numbers.
+  port: 80
+  annotations: {}
+  labels: {}
+  # For type LoadBalancer or NodePort.
+  loadBalancerIP: ""
+  externalTrafficPolicy: ""
+
+resources: {}
+  # requests:
+  #   cpu: "1"
+  #   memory: 2Gi
+  # GPU transcoding takes a device plugin's resource, such as
+  # gpu.intel.com/i915: 1 or nvidia.com/gpu: 1, in limits.
+
+# Pod settings. Anything here that is not annotations, labels or
+# containerSecurityContext goes into the pod spec as written: nodeSelector,
+# tolerations, affinity, runtimeClassName (nvidia), hostNetwork, ...
+pod:
+  annotations: {}
+  labels: {}
+  automountServiceAccountToken: false
+  imagePullSecrets: []
+  securityContext: {}
+  # The init runs as root and drops to PUID for Silo, so the container keeps
+  # Docker's default capabilities. NET_ADMIN is added by netAdmin.
+  containerSecurityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Gateway API. Off by default: a parentRef names a Gateway this chart cannot
+# guess.
+httpRoute:
+  enabled: false
+  annotations: {}
+  parentRefs: []
+  # - name: main
+  #   namespace: networking

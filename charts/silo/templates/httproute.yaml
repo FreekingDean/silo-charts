@@ -1,0 +1,45 @@
+{{- if .Values.httpRoute.enabled }}
+{{- if not .Values.httpRoute.parentRefs }}
+{{- fail "httpRoute.enabled needs httpRoute.parentRefs: a route with no Gateway is attached to nothing" }}
+{{- end }}
+{{- $routes := list (dict "suffix" "" "hostname" .Values.hostname "port" .Values.service.port) }}
+{{- with .Values.jellyfin.hostname }}
+{{- $routes = append $routes (dict "suffix" "-jellyfin" "hostname" . "port" $.Values.ports.jellyfin) }}
+{{- end }}
+{{- with .Values.audiobookshelf.hostname }}
+{{- $routes = append $routes (dict "suffix" "-abs" "hostname" . "port" $.Values.ports.audiobookshelf) }}
+{{- end }}
+{{- if and .Values.proxy.enabled .Values.proxy.domain }}
+{{- range (include "silo.proxyPods" . | fromJsonArray) }}
+{{- $routes = append $routes (dict "suffix" (trimPrefix (include "silo.fullname" $) .) "hostname" (printf "%s.%s" . $.Values.proxy.domain) "port" $.Values.service.port "service" . "component" "proxy") }}
+{{- end }}
+{{- end }}
+{{- range $routes }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "silo.fullname" $ }}{{ .suffix }}
+  labels:
+    {{- include "silo.labels" (dict "root" $ "component" (default "api" .component)) | nindent 4 }}
+  {{- with $.Values.httpRoute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- toYaml $.Values.httpRoute.parentRefs | nindent 4 }}
+  {{- with .hostname }}
+  hostnames:
+    - {{ . | quote }}
+  {{- end }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ default (include "silo.fullname" $) .service }}
+          port: {{ .port }}
+{{- end }}
+{{- end }}

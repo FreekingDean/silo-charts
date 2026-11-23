@@ -1,0 +1,27 @@
+name: PR title
+
+# The title decides the release: a merge to main bumps every chart's version by
+# the part the title names. patch: fixes, minor: new values or behaviour that
+# keeps existing installs working, major: anything an existing install has to
+# change for.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Title starts with patch:, minor: or major:"
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[ "$TITLE" =~ ^(patch|minor|major):\ [^[:space:]] ]]; then
+            echo "Release bump: ${BASH_REMATCH[1]}"
+          else
+            echo "::error::PR title must start with 'patch: ', 'minor: ' or 'major: ' followed by a summary. Got: $TITLE"
+            exit 1
+          fi

@@ -1,0 +1,17 @@
+apiVersion: v2
+name: silo-omnibus
+description: Silo in one pod — the all-in-one image with its bundled PostgreSQL, Redis and Meilisearch, as docker-compose.yml runs it
+type: application
+# Placeholders for an unreleased checkout. A checkout defaults to latest; pin
+# image.tag when installing from one.
+version: 0.0.0
+appVersion: "latest"
+home: https://github.com/FreekingDean/silo-charts
+sources:
+  - https://github.com/FreekingDean/silo-charts
+  - https://github.com/Silo-Server/silo-server
+keywords:
+  - silo
+  - media
+  - jellyfin
+kubeVersion: ">=1.25.0-0"

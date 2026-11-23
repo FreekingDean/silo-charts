@@ -1,0 +1,21 @@
+{{ .Chart.Name }} {{ .Chart.Version }} is installed as {{ .Release.Name }}: Silo, PostgreSQL{{ if .Values.bundled.redis }}, Redis{{ end }}{{ if .Values.bundled.meilisearch }}, Meilisearch{{ end }} in one pod.
+
+SECRET_KEY comes from the Secret {{ include "silo-omnibus.secretKeySecretName" . }}, key {{ .Values.secretKey.secretKey }}. Silo will not start without it. Create it before the pod starts, and back the key up apart from the database:
+
+  kubectl --namespace {{ .Release.Namespace }} create secret generic {{ include "silo-omnibus.secretKeySecretName" . }} \
+    --from-literal {{ .Values.secretKey.secretKey }}="$(openssl rand -base64 48)"
+
+The web app answers on http://{{ include "silo-omnibus.fullname" . }}.{{ .Release.Namespace }}:{{ .Values.service.port }}, or:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "silo-omnibus.fullname" . }} 8080:{{ .Values.service.port }}
+
+Open it to finish first-run setup. The Jellyfin-compatible API is on port {{ .Values.ports.jellyfin }} and Audiobookshelf on {{ .Values.ports.audiobookshelf }} of the same Service.
+
+/config (the database included) is on the PersistentVolumeClaim {{ include "silo-omnibus.configClaimName" . }}. It is kept when the release is uninstalled.
+{{ if not .Values.httpRoute.enabled }}
+httpRoute.enabled is false, so nothing outside the cluster reaches this release yet.
+{{- end }}
+{{- if not .Values.media.volume }}
+
+media.volume is empty, so the pod mounted an emptyDir — a library with nothing in it. Point it at the volume the media already lives on.
+{{- end }}

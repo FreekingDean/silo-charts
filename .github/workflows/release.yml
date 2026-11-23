@@ -1,0 +1,99 @@
+name: Release
+
+# Every merge to main is a release. The merged PR's title prefix (patch:,
+# minor: or major:, enforced by pr-title.yml) picks the bump from the latest
+# vX.Y.Z tag. Both charts are packaged at that version, pushed to
+# oci://ghcr.io/<owner>/charts, and the tag and a GitHub release are created.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@v5
+
+      - name: Find the merged PR and its bump
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[] | select(.merged_at != null)][0].title // ""')"
+          if [[ "$title" =~ ^(patch|minor|major): ]]; then
+            part="${BASH_REMATCH[1]}"
+          else
+            echo "::warning::No merged PR with a patch:/minor:/major: title for $GITHUB_SHA; nothing is released."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)"
+          last="${last:-v0.0.0}"
+          IFS=. read -r major minor patch <<< "${last#v}"
+          case "$part" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          version="$major.$minor.$patch"
+          echo "$last -> v$version ($part: $title)"
+          {
+            echo "release=true"
+            echo "version=$version"
+            echo "title<<EOF"
+            echo "$title"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Test charts
+        if: steps.bump.outputs.release == 'true'
+        run: ./ci/test-charts.sh
+
+      - name: Package and push charts
+        if: steps.bump.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          owner="$(tr '[:upper:]' '[:lower:]' <<< "$GITHUB_REPOSITORY_OWNER")"
+          echo "$GH_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          mkdir -p "$RUNNER_TEMP/charts"
+          for chart in charts/*/; do
+            helm package "$chart" --version "$VERSION" --destination "$RUNNER_TEMP/charts"
+          done
+          for pkg in "$RUNNER_TEMP"/charts/*.tgz; do
+            helm push "$pkg" "oci://ghcr.io/$owner/charts"
+          done
+
+      - name: Tag and release
+        if: steps.bump.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+          TITLE: ${{ steps.bump.outputs.title }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          owner="$(tr '[:upper:]' '[:lower:]' <<< "$GITHUB_REPOSITORY_OWNER")"
+          notes="$TITLE
+
+          \`\`\`sh
+          helm install silo oci://ghcr.io/$owner/charts/silo-omnibus --version $VERSION
+          helm install silo oci://ghcr.io/$owner/charts/silo --version $VERSION
+          \`\`\`"
+          gh release create "v$VERSION" "$RUNNER_TEMP"/charts/*.tgz \
+            --target "$GITHUB_SHA" --title "v$VERSION" --notes "$notes"
