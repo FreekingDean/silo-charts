@@ -359,7 +359,7 @@ secret-key, which Silo reads through SILO_S3_<PREFIX>_ACCESS_KEY_FILE and
 _SECRET_KEY_FILE. Silo has no _FILE variant for the endpoint or bucket, so
 those two go into /run/silo/s3/env as shell exports, which the API container
 sources before it runs silo. With objectStorage.cosi.envFiles they go into
-/run/silo/s3/s3.env as KEY=VALUE lines instead, which the kubelet reads
+/run/silo/s3/s3.env as KEY='VALUE' lines instead, which the kubelet reads
 through fileKeyRef, and silo starts directly. A missing field stops the pod here rather than
 leaving Silo half configured.
 */}}
@@ -385,11 +385,12 @@ leaving Silo half configured.
       : > "$out"
       export_var() {
         get "$1" "$3"
-        if [ "$(printf '%s' "$v" | wc -l)" -ne 0 ]; then
-          echo "$1: $3 spans lines" >&2
-          exit 1
-        fi
-        printf '%s=%s\n' "$2" "$v" >> "$out"
+        # The env-file format takes only single-quoted values, with no
+        # escapes inside them, so a value holding ' cannot be written.
+        case "$v" in
+          *"'"*) echo "$1: $3 holds a single quote" >&2; exit 1 ;;
+        esac
+        printf "%s='%s'\n" "$2" "$v" >> "$out"
       }
       {{- else }}
       out=/run/silo/s3/env

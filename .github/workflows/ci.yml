@@ -26,6 +26,16 @@ jobs:
       - name: Test charts
         run: ./ci/test-charts.sh
 
+      # The cosi-env init container's script, run against sample BucketInfo
+      # documents with the yq its default image ships.
+      - name: Install yq
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+      - name: Test cosi-env
+        run: ./ci/test-cosi-env.sh
+
   # Installs each chart into a one-node minikube cluster and checks that Silo
   # comes up healthy. The silo chart gets a test-only PostgreSQL and Redis.
   install:
