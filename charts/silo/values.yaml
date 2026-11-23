@@ -238,9 +238,11 @@ persistence:
 # moving storage is a managed transition in Silo, not a values change.
 objectStorage:
   enabled: false
-  # Reads a COSI BucketInfo document before Silo starts: an init container
-  # writes the endpoint, bucket and keys to a memory-backed file, and the API
-  # container sources it before it runs silo. The image needs sh and yq.
+  # Reads a COSI BucketInfo document before Silo starts. An init container
+  # writes the keys to memory-backed files Silo reads through
+  # SILO_S3_*_ACCESS_KEY_FILE and _SECRET_KEY_FILE, and the endpoint and
+  # bucket, which have no _FILE variant, to an env file the API container
+  # sources before it runs silo. The image needs sh and yq.
   cosi:
     image:
       repository: docker.io/mikefarah/yq
