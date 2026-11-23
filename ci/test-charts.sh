@@ -80,6 +80,8 @@ render silo --set persistence.data.enabled=false --set api.replicas=2 --set redi
   --set-json 'api.extraVolumeMounts=[{"name":"s3","mountPath":"/run/s3","readOnly":true}]' \
   --set-json 'api.env=[{"name":"SILO_ARTWORK_STORAGE","value":"s3"},{"name":"SILO_S3_PUBLIC_SECRET_KEY_FILE","value":"/run/s3/secret-key"}]' \
   --set-json 'api.envFrom=[{"configMapRef":{"name":"silo-s3"}}]' --set secretSettings.existingSecret=silo-settings
+render silo --set persistence.data.enabled=false --set objectStorage.enabled=true \
+  --set objectStorage.public.existingSecret=silo-public --set objectStorage.private.existingSecret=silo-private
 render silo --set api.autoscaling.enabled=true --set 'persistence.data.accessModes={ReadWriteMany}' \
   --set redis.existingSecret=silo-redis
 render silo --set hostname=silo.example.test --set jellyfin.hostname=jf.example.test \

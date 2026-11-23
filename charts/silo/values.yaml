@@ -243,18 +243,23 @@ persistence:
 # holds avatars, diagnostics, job artifacts and backups at the default
 # destination (SILO_S3_PRIVATE_*); without it those have nowhere to go.
 # Each bucket is either an ObjectBucketClaim's name, whose ConfigMap and Secret
-# give the endpoint, bucket and keys, or the fields below with a Secret you
-# create. Once Silo has written to storage, keep it pointing at the same place:
-# moving storage is a managed transition in Silo, not a values change.
+# give the endpoint, bucket and keys, or a Secret you name in existingSecret,
+# with the endpoint, bucket and region given below or read from it. A COSI
+# v1alpha2 BucketAccess Secret works as existingSecret alone. Once Silo has
+# written to storage, keep it pointing at the same place: moving storage is a
+# managed transition in Silo, not a values change.
 objectStorage:
   enabled: false
   public:
     objectBucketClaim: ""
     # http(s)://host:port. Ignored with objectBucketClaim, which uses
-    # http://BUCKET_HOST:BUCKET_PORT.
+    # http://BUCKET_HOST:BUCKET_PORT. Empty reads endpointKey from
+    # existingSecret; likewise bucket and region.
     endpoint: ""
     bucket: ""
-    region: us-east-1
+    # Empty takes the Secret's regionKey (or the ObjectBucketClaim's
+    # BUCKET_REGION) when it has one, and Silo's us-east-1 otherwise.
+    region: ""
     pathStyle: true
     # SILO_S3_PUBLIC_URL_AUTH: presigned, public or cloudflare_token. Empty
     # keeps Silo's default.
@@ -262,15 +267,25 @@ objectStorage:
     existingSecret: ""
     accessKeyKey: AWS_ACCESS_KEY_ID
     secretKeyKey: AWS_SECRET_ACCESS_KEY
+    # Read from existingSecret when endpoint, bucket or region is empty. The
+    # defaults are the key names a COSI v1alpha2 BucketAccess Secret uses.
+    endpointKey: AWS_ENDPOINT_URL
+    bucketKey: BUCKET_NAME
+    regionKey: AWS_DEFAULT_REGION
   private:
     objectBucketClaim: ""
     endpoint: ""
     bucket: ""
-    region: us-east-1
+    region: ""
     pathStyle: true
     existingSecret: ""
     accessKeyKey: AWS_ACCESS_KEY_ID
     secretKeyKey: AWS_SECRET_ACCESS_KEY
+    # Read from existingSecret when endpoint, bucket or region is empty. The
+    # defaults are the key names a COSI v1alpha2 BucketAccess Secret uses.
+    endpointKey: AWS_ENDPOINT_URL
+    bucketKey: BUCKET_NAME
+    regionKey: AWS_DEFAULT_REGION
 
 # MODE=proxy: stream egress nodes. Players are sent to a proxy for the stream
 # itself, so playback bandwidth, remuxing and direct play leave the API pods.

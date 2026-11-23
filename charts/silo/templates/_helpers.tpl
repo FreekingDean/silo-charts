@@ -264,17 +264,43 @@ share its name; its endpoint is assembled from BUCKET_HOST and BUCKET_PORT.
     configMapKeyRef:
       name: {{ $b.objectBucketClaim }}
       key: BUCKET_NAME
-{{- else }}
-{{- if not (and $b.endpoint $b.bucket $b.existingSecret) }}
-{{- fail (printf "objectStorage.%s needs objectBucketClaim, or endpoint, bucket and existingSecret" (lower $p)) }}
-{{- end }}
-- name: SILO_S3_{{ $p }}_ENDPOINT
-  value: {{ $b.endpoint | quote }}
-- name: SILO_S3_{{ $p }}_BUCKET
-  value: {{ $b.bucket | quote }}
-{{- end }}
+{{- if $b.region }}
 - name: SILO_S3_{{ $p }}_REGION
   value: {{ $b.region | quote }}
+{{- else }}
+- name: SILO_S3_{{ $p }}_REGION
+  valueFrom:
+    configMapKeyRef:
+      name: {{ $b.objectBucketClaim }}
+      key: BUCKET_REGION
+      optional: true
+{{- end }}
+{{- else }}
+{{- if not $b.existingSecret }}
+{{- fail (printf "objectStorage.%s needs objectBucketClaim or existingSecret" (lower $p)) }}
+{{- end }}
+{{- range $field := list (list "ENDPOINT" $b.endpoint $b.endpointKey) (list "BUCKET" $b.bucket $b.bucketKey) }}
+- name: SILO_S3_{{ $p }}_{{ index $field 0 }}
+{{- if index $field 1 }}
+  value: {{ index $field 1 | quote }}
+{{- else }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $b.existingSecret }}
+      key: {{ index $field 2 }}
+{{- end }}
+{{- end }}
+- name: SILO_S3_{{ $p }}_REGION
+{{- if $b.region }}
+  value: {{ $b.region | quote }}
+{{- else }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $b.existingSecret }}
+      key: {{ $b.regionKey }}
+      optional: true
+{{- end }}
+{{- end }}
 - name: SILO_S3_{{ $p }}_PATH_STYLE
   value: {{ $b.pathStyle | quote }}
 {{- with $b.urlAuth }}
@@ -299,7 +325,7 @@ share its name; its endpoint is assembled from BUCKET_HOST and BUCKET_PORT.
   value: s3
 {{- include "silo.s3Env" (dict "prefix" "PUBLIC" "bucket" .Values.objectStorage.public) }}
 {{- with .Values.objectStorage.private }}
-{{- if or .objectBucketClaim .endpoint }}
+{{- if or .objectBucketClaim .existingSecret .endpoint .bucket }}
 {{- include "silo.s3Env" (dict "prefix" "PRIVATE" "bucket" .) }}
 {{- end }}
 {{- end }}
