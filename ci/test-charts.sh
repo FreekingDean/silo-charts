@@ -75,11 +75,11 @@ render silo --set persistence.data.enabled=false --set objectStorage.enabled=tru
   --set objectStorage.public.endpoint=https://s3.example.test --set objectStorage.public.bucket=silo \
   --set objectStorage.public.existingSecret=silo-s3 --set objectStorage.public.urlAuth=presigned
 render silo --set persistence.data.enabled=false --set api.replicas=2 --set redis.existingSecret=silo-redis \
-  --set objectStorage.enabled=true --set objectStorage.public.cosiSecret=silo-public \
-  --set objectStorage.private.cosiSecret=silo-private \
-  --set-json 'api.pod={"initContainers":[{"name":"wait","image":"busybox:1.37","command":["true"]}]}'
-render silo --set objectStorage.enabled=true --set objectStorage.public.cosiSecret=silo-public \
-  --set objectStorage.private.objectBucketClaim=silo-private
+  --set-json 'api.pod={"initContainers":[{"name":"s3-env","image":"busybox:1.37","command":["true"],"volumeMounts":[{"name":"s3","mountPath":"/run/s3"}]}]}' \
+  --set-json 'api.extraVolumes=[{"name":"s3","emptyDir":{"medium":"Memory"}}]' \
+  --set-json 'api.extraVolumeMounts=[{"name":"s3","mountPath":"/run/s3","readOnly":true}]' \
+  --set-json 'api.env=[{"name":"SILO_ARTWORK_STORAGE","value":"s3"},{"name":"SILO_S3_PUBLIC_SECRET_KEY_FILE","value":"/run/s3/secret-key"}]' \
+  --set-json 'api.envFrom=[{"configMapRef":{"name":"silo-s3"}}]' --set secretSettings.existingSecret=silo-settings
 render silo --set api.autoscaling.enabled=true --set 'persistence.data.accessModes={ReadWriteMany}' \
   --set redis.existingSecret=silo-redis
 render silo --set hostname=silo.example.test --set jellyfin.hostname=jf.example.test \
@@ -95,8 +95,6 @@ refuses silo --set api.replicas=2 --set 'persistence.data.accessModes={ReadWrite
 refuses silo --set proxy.enabled=true
 refuses silo --set objectStorage.enabled=true
 refuses silo --set objectStorage.enabled=true --set objectStorage.public.endpoint=https://s3.example.test
-refuses silo --set objectStorage.enabled=true --set objectStorage.public.cosiSecret=silo-public \
-  --set objectStorage.public.objectBucketClaim=silo-public
 refuses silo --set transcode.enabled=true --set transcode.replicas=0
 refuses silo --set transcode.enabled=true --set transcode.sourceAccess=nfs
 refuses silo --set api.autoscaling.enabled=true --set 'persistence.data.accessModes={ReadWriteMany}' \
@@ -104,18 +102,7 @@ refuses silo --set api.autoscaling.enabled=true --set 'persistence.data.accessMo
 refuses silo --set redis.existingSecret=silo-redis --set proxy.enabled=true \
   --set proxy.autoscaling.enabled=true --set proxy.autoscaling.minReplicas=9
 
-# fileKeyRef (EnvFiles) is alpha in 1.34, so this render is validated against
-# the 1.34 schemas on its own.
-cosi_env_files=(--set persistence.data.enabled=false --set objectStorage.enabled=true
-  --set objectStorage.public.cosiSecret=silo-public --set objectStorage.private.cosiSecret=silo-private
-  --set objectStorage.cosi.envFiles=true)
-refuses silo "${cosi_env_files[@]}"
-mkdir "$out/1.34"
-helm template t charts/silo --kube-version 1.34.0 "${cosi_env_files[@]}" > "$out/1.34/cosi-env-files.yaml"
-n=$((n + 1))
-
 if command -v kubeconform > /dev/null; then
   kubeconform -strict -summary -kubernetes-version "$KUBE_VERSION" -ignore-missing-schemas "$out"/*.yaml
-  kubeconform -strict -summary -kubernetes-version 1.34.0 -ignore-missing-schemas "$out"/1.34/*.yaml
 fi
 echo "ok: $n renders"

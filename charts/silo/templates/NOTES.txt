@@ -37,5 +37,7 @@ media.volume is empty, so the pods mounted an emptyDir — a library with nothin
 {{- if not .Values.persistence.data.enabled }}
 
 persistence.data.enabled is false, so /config/silo is an emptyDir. A restart loses the plugin cache (rebuilt from the database) and the Jellyfin web client (reinstall it in the admin settings).
-{{- if not .Values.objectStorage.enabled }} objectStorage is off too, so artwork, trickplay, subtitles, avatars and backups at the default destination are lost with the pod.{{ end }}
+{{- $storageEnv := false }}
+{{- range .Values.api.env }}{{ if eq .name "SILO_ARTWORK_STORAGE" }}{{ $storageEnv = true }}{{ end }}{{ end }}
+{{- if not (or .Values.objectStorage.enabled $storageEnv (hasKey .Values.settings "SILO_ARTWORK_STORAGE")) }} objectStorage is off too, so artwork, trickplay, subtitles, avatars and backups at the default destination are lost with the pod.{{ end }}
 {{- end }}

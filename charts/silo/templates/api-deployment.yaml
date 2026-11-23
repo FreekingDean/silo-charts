@@ -8,13 +8,6 @@
 {{- end }}
 {{- $base := mergeOverwrite (include "silo.spread" (dict "root" $ "component" $component) | fromYaml) (dict "terminationGracePeriodSeconds" (add (int .Values.drainSeconds) 90)) }}
 {{- $pod := include "silo.mergePod" (dict "root" $ "base" $base "pod" .Values.api.pod) | fromYaml }}
-{{- $cosi := include "silo.cosiBuckets" . | fromJson }}
-{{- $envFiles := and $cosi .Values.objectStorage.cosi.envFiles }}
-{{- if and $envFiles (semverCompare "<1.34-0" .Capabilities.KubeVersion.Version) }}
-{{- fail "objectStorage.cosi.envFiles needs Kubernetes 1.34 or later with the EnvFiles feature gate on" }}
-{{- end }}
-{{- $initContainers := default list $pod.initContainers }}
-{{- $_ := unset $pod "initContainers" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,27 +43,13 @@ spec:
       {{- with (include "silo.podSpec" $pod | trim) }}
       {{- . | nindent 6 }}
       {{- end }}
-      {{- if or $initContainers $cosi }}
-      initContainers:
-        {{- with $initContainers }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-        {{- if $cosi }}
-        {{- include "silo.cosiInitContainer" (dict "root" $ "buckets" $cosi "securityContext" $pod.containerSecurityContext) | trim | nindent 8 }}
-        {{- end }}
-      {{- end }}
       containers:
         - name: silo
           image: {{ include "silo.image" . }}
           imagePullPolicy: {{ include "silo.imagePullPolicy" . }}
           # The binary itself rather than the omnibus image's /init, which
           # needs root and would start a PostgreSQL of its own.
-          {{- if and $cosi (not $envFiles) }}
-          # The COSI buckets' endpoints and buckets, written by cosi-env.
-          command: ["/bin/sh", "-c", ". /run/silo/s3/env && exec silo"]
-          {{- else }}
           command: ["silo"]
-          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.ports.http }}
@@ -118,10 +97,18 @@ spec:
             - name: {{ $name }}
               value: {{ toString $value | quote }}
             {{- end }}
-          {{- with .Values.secretSettings.existingSecret }}
+            {{- with .Values.api.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if or .Values.secretSettings.existingSecret .Values.api.envFrom }}
           envFrom:
+            {{- with .Values.secretSettings.existingSecret }}
             - secretRef:
                 name: {{ . }}
+            {{- end }}
+            {{- with .Values.api.envFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           startupProbe:
             httpGet:
@@ -168,12 +155,10 @@ spec:
               mountPath: /run/silo/transcode-keys
               readOnly: true
             {{- end }}
-            {{- if $cosi }}
-            - name: s3-env
-              mountPath: /run/silo/s3
-              readOnly: true
-            {{- end }}
             {{- include "silo.mediaVolumeMount" . | nindent 12 }}
+            {{- with .Values.api.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: data
           {{- if .Values.persistence.data.enabled }}
@@ -200,16 +185,7 @@ spec:
             secretName: {{ include "silo.transcodeKeysSecretName" . }}
             defaultMode: 0440
         {{- end }}
-        {{- if $cosi }}
-        - name: s3-env
-          emptyDir:
-            medium: Memory
-            sizeLimit: 1Mi
-        {{- range $p, $secret := $cosi }}
-        - name: cosi-{{ lower $p }}
-          secret:
-            secretName: {{ $secret }}
-            defaultMode: 0440
-        {{- end }}
-        {{- end }}
         {{- include "silo.mediaVolume" . | nindent 8 }}
+        {{- with .Values.api.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

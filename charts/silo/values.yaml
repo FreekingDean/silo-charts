@@ -198,6 +198,17 @@ api:
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
+  # Env for the API container only, in Kubernetes' own shape, after the
+  # chart's own variables: a value here can refer to theirs as $(NAME), and
+  # one with the same name replaces the chart's.
+  env: []
+  # envFrom sources for the API container, after secretSettings.
+  envFrom: []
+  # Volumes for API pods, in Kubernetes' own shape, and where the API
+  # container mounts them. Init containers go in pod.initContainers and can
+  # mount these volumes too.
+  extraVolumes: []
+  extraVolumeMounts: []
   pod: {}
 
 persistence:
@@ -231,35 +242,16 @@ persistence:
 # downloaded subtitles (SILO_ARTWORK_STORAGE=s3, SILO_S3_PUBLIC_*). private
 # holds avatars, diagnostics, job artifacts and backups at the default
 # destination (SILO_S3_PRIVATE_*); without it those have nowhere to go.
-# Each bucket is one of: an ObjectBucketClaim's name, whose ConfigMap and
-# Secret give the endpoint, bucket and keys; a COSI BucketAccess's
-# credentialsSecretName (cosiSecret), whose BucketInfo key gives them; or the
-# fields below with a Secret you create. Once Silo has written to storage, keep it pointing at the same place:
+# Each bucket is either an ObjectBucketClaim's name, whose ConfigMap and Secret
+# give the endpoint, bucket and keys, or the fields below with a Secret you
+# create. Once Silo has written to storage, keep it pointing at the same place:
 # moving storage is a managed transition in Silo, not a values change.
 objectStorage:
   enabled: false
-  # Reads a COSI BucketInfo document before Silo starts. An init container
-  # writes the keys to memory-backed files Silo reads through
-  # SILO_S3_*_ACCESS_KEY_FILE and _SECRET_KEY_FILE, and the endpoint and
-  # bucket, which have no _FILE variant, to an env file the API container
-  # sources before it runs silo. The image needs sh and yq.
-  cosi:
-    # Read the endpoint and bucket with fileKeyRef (the EnvFiles feature,
-    # alpha in Kubernetes 1.34, behind the EnvFiles gate on the API server and
-    # kubelets) instead of sourcing a shell file, so the container runs silo
-    # directly. Off works on every cluster.
-    envFiles: false
-    image:
-      repository: docker.io/mikefarah/yq
-      tag: "4.54.1"
-      pullPolicy: ""
   public:
     objectBucketClaim: ""
-    # A COSI BucketAccess's credentialsSecretName (objectstorage.k8s.io). Its
-    # bucket name is generated, so it comes from the Secret, not from values.
-    cosiSecret: ""
     # http(s)://host:port. Ignored with objectBucketClaim, which uses
-    # http://BUCKET_HOST:BUCKET_PORT, and with cosiSecret.
+    # http://BUCKET_HOST:BUCKET_PORT.
     endpoint: ""
     bucket: ""
     region: us-east-1
@@ -272,7 +264,6 @@ objectStorage:
     secretKeyKey: AWS_SECRET_ACCESS_KEY
   private:
     objectBucketClaim: ""
-    cosiSecret: ""
     endpoint: ""
     bucket: ""
     region: us-east-1
