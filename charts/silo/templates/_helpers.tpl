@@ -252,6 +252,20 @@ init container writes, so only the settings values hold are set here.
 {{- fail (printf "objectStorage.%s takes objectBucketClaim or cosiSecret, not both" (lower $p)) }}
 {{- end }}
 {{- if $b.cosiSecret }}
+{{- if .envFiles }}
+- name: SILO_S3_{{ $p }}_ENDPOINT
+  valueFrom:
+    fileKeyRef:
+      volumeName: s3-env
+      path: s3.env
+      key: SILO_S3_{{ $p }}_ENDPOINT
+- name: SILO_S3_{{ $p }}_BUCKET
+  valueFrom:
+    fileKeyRef:
+      volumeName: s3-env
+      path: s3.env
+      key: SILO_S3_{{ $p }}_BUCKET
+{{- end }}
 {{- else if $b.objectBucketClaim }}
 - name: SILO_OBC_{{ $p }}_HOST
   valueFrom:
@@ -325,7 +339,7 @@ init container writes, so only the settings values hold are set here.
 - name: SILO_ARTWORK_STORAGE
   value: s3
 {{- range $p, $b := include "silo.s3Buckets" . | fromJson }}
-{{- include "silo.s3Env" (dict "prefix" $p "bucket" $b) }}
+{{- include "silo.s3Env" (dict "prefix" $p "bucket" $b "envFiles" $.Values.objectStorage.cosi.envFiles) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -344,7 +358,9 @@ Writes each COSI BucketInfo's keys to /run/silo/s3/<prefix>/access-key and
 secret-key, which Silo reads through SILO_S3_<PREFIX>_ACCESS_KEY_FILE and
 _SECRET_KEY_FILE. Silo has no _FILE variant for the endpoint or bucket, so
 those two go into /run/silo/s3/env as shell exports, which the API container
-sources before it runs silo. A missing field stops the pod here rather than
+sources before it runs silo. With objectStorage.cosi.envFiles they go into
+/run/silo/s3/s3.env as KEY=VALUE lines instead, which the kubelet reads
+through fileKeyRef, and silo starts directly. A missing field stops the pod here rather than
 leaving Silo half configured.
 */}}
 {{- define "silo.cosiInitContainer" -}}
@@ -357,8 +373,6 @@ leaving Silo half configured.
   args:
     - |
       set -eu
-      out=/run/silo/s3/env
-      : > "$out"
       get() {
         v="$(yq -p json -o json -r "$2 // \"\"" "$1")"
         if [ -z "$v" ]; then
@@ -366,10 +380,25 @@ leaving Silo half configured.
           exit 1
         fi
       }
+      {{- if $root.Values.objectStorage.cosi.envFiles }}
+      out=/run/silo/s3/s3.env
+      : > "$out"
+      export_var() {
+        get "$1" "$3"
+        if [ "$(printf '%s' "$v" | wc -l)" -ne 0 ]; then
+          echo "$1: $3 spans lines" >&2
+          exit 1
+        fi
+        printf '%s=%s\n' "$2" "$v" >> "$out"
+      }
+      {{- else }}
+      out=/run/silo/s3/env
+      : > "$out"
       export_var() {
         get "$1" "$3"
         printf "export %s='%s'\n" "$2" "$(printf '%s' "$v" | sed "s/'/'\\\\''/g")" >> "$out"
       }
+      {{- end }}
       write_file() {
         get "$1" "$3"
         printf '%s' "$v" > "$2"

@@ -9,6 +9,10 @@
 {{- $base := mergeOverwrite (include "silo.spread" (dict "root" $ "component" $component) | fromYaml) (dict "terminationGracePeriodSeconds" (add (int .Values.drainSeconds) 90)) }}
 {{- $pod := include "silo.mergePod" (dict "root" $ "base" $base "pod" .Values.api.pod) | fromYaml }}
 {{- $cosi := include "silo.cosiBuckets" . | fromJson }}
+{{- $envFiles := and $cosi .Values.objectStorage.cosi.envFiles }}
+{{- if and $envFiles (semverCompare "<1.34-0" .Capabilities.KubeVersion.Version) }}
+{{- fail "objectStorage.cosi.envFiles needs Kubernetes 1.34 or later with the EnvFiles feature gate on" }}
+{{- end }}
 {{- $initContainers := default list $pod.initContainers }}
 {{- $_ := unset $pod "initContainers" }}
 apiVersion: apps/v1
@@ -61,8 +65,8 @@ spec:
           imagePullPolicy: {{ include "silo.imagePullPolicy" . }}
           # The binary itself rather than the omnibus image's /init, which
           # needs root and would start a PostgreSQL of its own.
-          {{- if $cosi }}
-          # The COSI buckets' endpoints and keys, written by cosi-env.
+          {{- if and $cosi (not $envFiles) }}
+          # The COSI buckets' endpoints and buckets, written by cosi-env.
           command: ["/bin/sh", "-c", ". /run/silo/s3/env && exec silo"]
           {{- else }}
           command: ["silo"]

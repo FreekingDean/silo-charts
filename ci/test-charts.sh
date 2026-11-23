@@ -104,7 +104,18 @@ refuses silo --set api.autoscaling.enabled=true --set 'persistence.data.accessMo
 refuses silo --set redis.existingSecret=silo-redis --set proxy.enabled=true \
   --set proxy.autoscaling.enabled=true --set proxy.autoscaling.minReplicas=9
 
+# fileKeyRef (EnvFiles) is alpha in 1.34, so this render is validated against
+# the 1.34 schemas on its own.
+cosi_env_files=(--set persistence.data.enabled=false --set objectStorage.enabled=true
+  --set objectStorage.public.cosiSecret=silo-public --set objectStorage.private.cosiSecret=silo-private
+  --set objectStorage.cosi.envFiles=true)
+refuses silo "${cosi_env_files[@]}"
+mkdir "$out/1.34"
+helm template t charts/silo --kube-version 1.34.0 "${cosi_env_files[@]}" > "$out/1.34/cosi-env-files.yaml"
+n=$((n + 1))
+
 if command -v kubeconform > /dev/null; then
   kubeconform -strict -summary -kubernetes-version "$KUBE_VERSION" -ignore-missing-schemas "$out"/*.yaml
+  kubeconform -strict -summary -kubernetes-version 1.34.0 -ignore-missing-schemas "$out"/1.34/*.yaml
 fi
 echo "ok: $n renders"

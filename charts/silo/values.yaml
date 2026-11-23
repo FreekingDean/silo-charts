@@ -244,6 +244,11 @@ objectStorage:
   # bucket, which have no _FILE variant, to an env file the API container
   # sources before it runs silo. The image needs sh and yq.
   cosi:
+    # Read the endpoint and bucket with fileKeyRef (the EnvFiles feature,
+    # alpha in Kubernetes 1.34, behind the EnvFiles gate on the API server and
+    # kubelets) instead of sourcing a shell file, so the container runs silo
+    # directly. Off works on every cluster.
+    envFiles: false
     image:
       repository: docker.io/mikefarah/yq
       tag: "4.54.1"
